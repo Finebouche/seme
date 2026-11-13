@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>Sème — une graine</title>
+  <defs>
+    <linearGradient id="seed" x1="14" y1="53" x2="49" y2="10" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#27956C"/>
+      <stop offset="1" stop-color="#B6E891"/>
+    </linearGradient>
+  </defs>
+  <path d="M50 9C33 8 15 17 11 33C7 47 17 57 30 55C46 53 56 34 50 9Z" fill="url(#seed)"/>
+  <path d="M49 12C47 28 36 44 22 50" stroke="#123D2E" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M19 30C22 24 28 20 34 18" stroke="#DFF6CB" stroke-width="3" stroke-linecap="round" opacity=".65"/>
+</svg>
