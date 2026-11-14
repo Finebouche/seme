@@ -5,18 +5,35 @@ import (
 	"strings"
 )
 
-// Manifest is the Stremio addon manifest. seedstrem is a stream-only
-// addon: it declares no catalogs and relies on Cinemeta for metadata.
+// Manifest is the Stremio addon manifest.
 type Manifest struct {
-	ID            string         `json:"id"`
-	Version       string         `json:"version"`
-	Name          string         `json:"name"`
-	Description   string         `json:"description"`
-	Resources     []string       `json:"resources"`
-	Types         []string       `json:"types"`
-	Catalogs      []any          `json:"catalogs"`
-	IDPrefixes    []string       `json:"idPrefixes"`
-	BehaviorHints map[string]any `json:"behaviorHints,omitempty"`
+	ID            string             `json:"id"`
+	Version       string             `json:"version"`
+	Name          string             `json:"name"`
+	Description   string             `json:"description"`
+	Resources     []ManifestResource `json:"resources"`
+	Types         []string           `json:"types"`
+	Catalogs      []ManifestCatalog  `json:"catalogs"`
+	IDPrefixes    []string           `json:"idPrefixes"`
+	BehaviorHints map[string]any     `json:"behaviorHints,omitempty"`
+}
+
+type ManifestResource struct {
+	Name       string   `json:"name"`
+	Types      []string `json:"types"`
+	IDPrefixes []string `json:"idPrefixes,omitempty"`
+}
+
+type ManifestCatalog struct {
+	Type  string         `json:"type"`
+	ID    string         `json:"id"`
+	Name  string         `json:"name"`
+	Extra []CatalogExtra `json:"extra,omitempty"`
+}
+
+type CatalogExtra struct {
+	Name       string `json:"name"`
+	IsRequired bool   `json:"isRequired"`
 }
 
 const manifestID = "com.finebouche.seme"
@@ -24,7 +41,7 @@ const manifestID = "com.finebouche.seme"
 // fallbackVersion is served when the build-injected version isn't a valid
 // semantic version (e.g. "dev", "docker", a branch name, or a git sha).
 // Stremio rejects a manifest whose "version" isn't semver.
-const fallbackVersion = "0.0.0"
+const fallbackVersion = "0.2.0"
 
 // semverRE matches a semantic version with an optional leading "v" and
 // optional prerelease/build metadata. This mirrors what Stremio accepts.
@@ -58,15 +75,21 @@ func BuildManifest(version string, addon AddonSettings) Manifest {
 		idPrefixes = append(idPrefixes, "kitsu", "mal", "anilist", "anidb")
 	}
 
+	types = append(types, seedType)
+	idPrefixes = append(idPrefixes, seedIDPrefix)
 	return Manifest{
 		ID:          manifestID,
 		Version:     manifestVersion(version),
 		Name:        "Sème",
 		Description: "Stream with Transmission, keep sharing after watching. Based on Seedstrem; sources from Torrentio or Prowlarr.",
-		Resources:   []string{"stream"},
-		Types:       types,
-		Catalogs:    []any{},
-		IDPrefixes:  idPrefixes,
+		Resources: []ManifestResource{
+			{Name: "stream", Types: types, IDPrefixes: idPrefixes},
+			{Name: "catalog", Types: []string{seedType}},
+			{Name: "meta", Types: []string{seedType}, IDPrefixes: []string{seedIDPrefix}},
+		},
+		Types:      types,
+		Catalogs:   []ManifestCatalog{{Type: seedType, ID: seedCatalogID, Name: "Sème — Currently seeding", Extra: []CatalogExtra{{Name: "skip"}}}},
+		IDPrefixes: idPrefixes,
 		BehaviorHints: map[string]any{
 			"configurable": false,
 		},

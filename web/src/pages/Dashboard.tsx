@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { api, Torrent } from "../api";
 import { formatBytes, formatSpeed } from "../lib/format";
 import { DASHBOARD_STATUSES } from "../lib/status";
+import { stremioInstallURL } from "../lib/stremio";
 import { usePolling } from "../lib/usePolling";
 import { useToast } from "../components/Toast";
 import { StatCard, StatRow } from "../components/StatCard";
@@ -51,8 +52,7 @@ export function Dashboard() {
 
   const externalHostMismatch =
     new URL(status.external_url).host !== window.location.host;
-  // stremio:// deep link installs the addon directly in the Stremio app.
-  const stremioDeepLink = status.manifest_url.replace(/^https?:\/\//, "stremio://");
+  const stremioDeepLink = stremioInstallURL(status.manifest_url);
   // Older backends only report the qbittorrent key.
   const downloaderStatus = status.downloader ?? status.qbittorrent;
   const downloaderName = status.downloader?.type === "transmission" ? "Transmission" : status.downloader?.type === "deluge" ? "Deluge" : "qBittorrent";

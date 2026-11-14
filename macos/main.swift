@@ -313,7 +313,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     @objc private func installInStremio() {
         guard startupComplete else { return }
         guard configured else { openSetup(); return }
-        guard let url = URL(string: "stremio://127.0.0.1:17880/stremio/manifest.json") else { return }
+        guard let manifest = URL(string: "http://127.0.0.1:17880/stremio/manifest.json"),
+              let url = stremioInstallationURL(for: manifest) else { return }
         guard NSWorkspace.shared.urlForApplication(toOpen: url) != nil else {
             let alert = NSAlert()
             alert.messageText = "Install Stremio to continue"

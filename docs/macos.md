@@ -20,6 +20,12 @@ son interface web ; Transmission reste une application distincte à installer et
 4. Cliquez sur **Install in Stremio**, confirmez l’installation dans Stremio,
    puis choisissez une source **Sème** pour lancer une lecture.
 
+Si Stremio affiche une erreur de manifeste, utilisez **Copy** dans le tableau
+de bord, puis collez l’adresse complète dans le champ d’ajout d’extension de
+Stremio : `http://127.0.0.1:17880/stremio/manifest.json`. Gardez Sème ouvert.
+Le protocole `http://` et le port `:17880` sont indispensables. Le bouton utilise
+la route d’ajout de Stremio pour éviter la réécriture des anciens liens en HTTPS.
+
 **Démarrer à l’ouverture de session** est une option volontaire, désactivée par
 défaut. Elle se gère depuis le menu de Sème ; macOS affiche aussi les applications
 autorisées dans **Réglages Système → Général → Ouverture**. Conservez l’application
@@ -29,6 +35,15 @@ Fermer la fenêtre laisse Sème disponible dans la barre des menus. **Quitter S�
 arrête son serveur local ; Transmission conserve les téléchargements et continue
 de partager les torrents. Les lectures servies par Sème s’arrêtent quand vous
 quittez l’application.
+
+Le catalogue **Sème — Currently seeding** est accessible dans Stremio avec les
+affiches et les statistiques de partage. Après une mise à jour depuis la version
+sans catalogue, retirez puis réinstallez l’extension Sème pour actualiser son
+manifeste ; les torrents restent dans Transmission. La liste est vide tant
+qu’aucun torrent géré n’est en seed. Les fiches affichent un relevé daté, soumis
+au cache de Stremio. Gardez Sème ouvert pour les consulter ; Transmission seul
+suffit pour continuer le partage lorsque Stremio et Sème sont fermés, tant que
+le Mac reste éveillé et connecté.
 
 ## Données et dépannage
 
@@ -94,8 +109,8 @@ les deux versions ; aucun bundle universel n’est produit. Une nouvelle exécut
 remplace `dist/Sème.app` et l’archive de l’architecture choisie.
 
 `VERSION` identifie le serveur (par défaut `git describe --tags --always --dirty`).
-`MACOS_VERSION` définit la version affichée du bundle (défaut `0.1.0`) et
-`MACOS_BUILD_NUMBER` son numéro de build (défaut `1`). Pour un build de release,
+`MACOS_VERSION` définit la version affichée du bundle (défaut `0.2.0`) et
+`MACOS_BUILD_NUMBER` son numéro de build (défaut `2`). Pour un build de release,
 fixez ces valeurs et utilisez les mêmes versions de Go, Node/npm, Xcode et macOS.
 Le lockfile et `go.sum` fixent les dépendances ; les signatures horodatées et les
 métadonnées des archives ne garantissent pas une identité binaire entre builds.

@@ -127,11 +127,11 @@ func TestManifest(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
 		t.Fatalf("decode manifest: %v", err)
 	}
-	if len(m.Resources) != 1 || m.Resources[0] != "stream" {
+	if len(m.Resources) != 3 || m.Resources[0].Name != "stream" {
 		t.Errorf("resources = %v", m.Resources)
 	}
-	if len(m.Types) != 2 {
-		t.Errorf("types = %v, want movie+series", m.Types)
+	if len(m.Types) != 3 {
+		t.Errorf("types = %v, want movie+series+other", m.Types)
 	}
 }
 

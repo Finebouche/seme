@@ -47,6 +47,11 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 		id = decoded
 	}
 
+	if typ == seedType || strings.HasPrefix(id, seedIDPrefix) {
+		h.seedStreams(w, r, s, typ, id)
+		return
+	}
+
 	empty := streamResponse{Streams: []streamItem{}}
 
 	h.logger.Debug("stremio: stream discovery request", "type", typ, "id", id)

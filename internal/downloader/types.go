@@ -17,7 +17,10 @@ type TorrentInfo struct {
 	NumSeeds  int64
 	Uploaded  int64   // total bytes uploaded (for ratio tracking)
 	Ratio     float64 // upload/download ratio reported by the client
-	SavePath  string
+	// RatioUnavailable distinguishes a client's unknown/infinite sentinel
+	// from a measured ratio of zero while retaining a finite numeric value.
+	RatioUnavailable bool
+	SavePath         string
 	// ContentPath is the client's current on-disk location of the
 	// content: the temp/incomplete folder while downloading, the final
 	// path once complete. For single-file torrents it is the file itself.

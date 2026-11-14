@@ -56,6 +56,31 @@ Les variables `SEME_*` permettent de surcharger la configuration ; les anciennes
 - `seeding.full: false` est le réglage par défaut : seul le fichier joué est sélectionné, et les données obtenues restent partageables après le visionnage. Avec `true`, le torrent entier est téléchargé, y compris les autres épisodes d’un pack de saison, en donnant la priorité au fichier choisi.
 - Pour un nettoyage automatique volontaire, désactivez `keep_forever`, puis choisissez les seuils de durée/ratio. `storage.delete_files_on_remove` contrôle la suppression des données et vaut `false` par défaut. Une suppression manuelle explicite reste possible.
 
+## Voir ses partages dans Stremio
+
+Le catalogue **Sème — Currently seeding** affiche les torrents suivis par Sème
+qui portent encore son label et que le client torrent signale en cours de seed,
+y compris lorsqu’ils attendent des pairs. Les torrents en pause, en erreur ou
+encore en téléchargement ne figurent pas dans cette liste.
+
+Chaque fiche présente l’affiche du titre quand ses métadonnées sont connues,
+sinon le logo Sème, ainsi que le volume envoyé, le ratio et l’état relevés à la
+date indiquée. Ces statistiques concernent le torrent entier ; finir un épisode
+ne signifie pas avoir téléchargé toute la saison. Stremio peut conserver les
+résultats en cache : ce catalogue n’est pas un tableau de bord en temps réel.
+
+Les vidéos déjà entièrement téléchargées et précédemment sélectionnées peuvent
+être relues depuis leur fiche, sans nouvelle recherche Torrentio. Consulter le
+catalogue ne lance aucun téléchargement et ne change aucune priorité.
+
+Après une mise à jour depuis la version sans catalogue, retirez puis réinstallez
+l’extension Sème dans Stremio pour actualiser son manifeste. Cela ne supprime
+pas les torrents de Transmission. Le catalogue peut être vide tant qu’aucun
+torrent géré n’est en seed ; cherchez-le aussi dans **Découvrir → Autres**.
+Sème doit rester ouvert pour fournir le catalogue et les vidéos. Transmission
+continue de partager après fermeture de Stremio, et même après fermeture de
+Sème, tant que Transmission tourne et que le Mac reste éveillé et connecté.
+
 ## Lecture pendant le téléchargement
 
 L'index `fileIdx` fourni par Torrentio est conservé, y compris l'index zéro. Sans index, Sème utilise la sélection d'épisode par nom de fichier héritée de Seedstrem. Les trackers de `sources` sont transmis dans le magnet ; la découverte DHT dépend également de son activation dans Transmission.

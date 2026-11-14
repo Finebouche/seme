@@ -21,10 +21,11 @@ const (
 	httpTimeout        = 15 * time.Second
 )
 
-// Info is the resolved title/year for a content id.
+// Info is the resolved title, year, and optional poster for a content id.
 type Info struct {
-	Name string
-	Year int
+	Name   string
+	Year   int
+	Poster string
 }
 
 // Client resolves titles from Cinemeta (IMDB) and Kitsu (anime), and
@@ -104,6 +105,7 @@ func (c *Client) Meta(ctx context.Context, typ, imdbID string) (Info, error) {
 	var body struct {
 		Meta struct {
 			Name        string `json:"name"`
+			Poster      string `json:"poster"`
 			Year        string `json:"year"`
 			ReleaseInfo string `json:"releaseInfo"`
 		} `json:"meta"`
@@ -114,7 +116,7 @@ func (c *Client) Meta(ctx context.Context, typ, imdbID string) (Info, error) {
 	if body.Meta.Name == "" {
 		return Info{}, fmt.Errorf("cinemeta: no title for %s", imdbID)
 	}
-	info := Info{Name: body.Meta.Name, Year: parseYear(body.Meta.Year, body.Meta.ReleaseInfo)}
+	info := Info{Name: body.Meta.Name, Year: parseYear(body.Meta.Year, body.Meta.ReleaseInfo), Poster: posterURL(body.Meta.Poster)}
 	c.cachePut(key, info)
 	return info, nil
 }
@@ -211,4 +213,13 @@ func (c *Client) getJSON(ctx context.Context, url string, dst any) error {
 		return fmt.Errorf("meta: decode %s: %w", url, err)
 	}
 	return nil
+}
+
+// posterURL accepts only absolute web URLs supplied by metadata providers.
+func posterURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return ""
+	}
+	return raw
 }

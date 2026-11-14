@@ -138,7 +138,8 @@ func run() error {
 	stremioHandler := stremio.New(torrentSvc, metaClient, func() stremio.Settings {
 		c := cm.Get()
 		return stremio.Settings{
-			ExternalURL: c.Server.ExternalURL,
+			ExternalURL:  c.Server.ExternalURL,
+			ManagedLabel: c.ClientLabel(),
 			Torrentio: stremio.TorrentioSettings{
 				Enabled: c.Torrentio.Enabled,
 				URL:     c.Torrentio.URL,

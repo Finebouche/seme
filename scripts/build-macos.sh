@@ -13,8 +13,8 @@ case "$ARCH" in
   *) echo "ARCH must be arm64 or x86_64 (separate builds, not universal)." >&2; exit 1 ;;
 esac
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
-MACOS_VERSION="${MACOS_VERSION:-0.1.0}"
-MACOS_BUILD_NUMBER="${MACOS_BUILD_NUMBER:-1}"
+MACOS_VERSION="${MACOS_VERSION:-0.2.0}"
+MACOS_BUILD_NUMBER="${MACOS_BUILD_NUMBER:-2}"
 CREATE_DMG="${CREATE_DMG:-0}"
 NOTARIZE="${NOTARIZE:-0}"
 for tool in go npm xcrun sips iconutil codesign ditto; do
@@ -35,6 +35,8 @@ RESOURCES="$APP/Contents/Resources"
 ARCHIVE="$ROOT/dist/Seme-macos-$ARCH.zip"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/seme-macos.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
+xcrun swiftc macos/StremioLink.swift scripts/tests/StremioLinkTests.swift -o "$WORK/link-tests"
+"$WORK/link-tests"
 mkdir -p dist
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$RESOURCES"

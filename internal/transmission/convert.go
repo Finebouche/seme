@@ -76,6 +76,7 @@ func (t torrent) info() downloader.TorrentInfo {
 	info := downloader.TorrentInfo{Hash: strings.ToLower(t.Hash), Name: t.Name, State: normalizeState(t.Status, t.Error),
 		Progress: t.Progress, Size: t.Size, Completed: completed, DlSpeed: t.DlSpeed, NumSeeds: seeds, Uploaded: t.Uploaded,
 		Ratio: ratio, SavePath: t.DownloadDir, SeedingTime: time.Duration(t.SeedingSeconds) * time.Second, SequentialDownload: t.Sequential}
+	info.RatioUnavailable = t.Ratio < 0
 	if t.AddedDate > 0 {
 		info.AddedAt = time.Unix(t.AddedDate, 0)
 	}

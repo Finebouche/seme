@@ -17,34 +17,46 @@ var kitsuExternalSite = map[string]string{
 // up directly; other sources (mal/anilist/anidb) go through Kitsu's
 // mappings endpoint.
 func (c *Client) AnimeTitle(ctx context.Context, source, id string) (string, error) {
+	info, err := c.AnimeMeta(ctx, source, id)
+	return info.Name, err
+}
+
+// AnimeMeta resolves anime title, year, and optional poster using Kitsu.
+// It shares the cache used by AnimeTitle.
+func (c *Client) AnimeMeta(ctx context.Context, source, id string) (Info, error) {
 	key := "anime:" + source + ":" + id
 	if info, ok := c.cacheGet(key); ok {
-		return info.Name, nil
+		return info, nil
 	}
-
-	var title string
+	var info Info
 	var err error
 	switch source {
 	case "kitsu":
-		title, err = c.kitsuTitleByID(ctx, id)
+		info, err = c.kitsuInfoByID(ctx, id)
 	case "mal", "anilist", "anidb":
-		title, err = c.kitsuTitleByMapping(ctx, kitsuExternalSite[source], id)
+		info, err = c.kitsuInfoByMapping(ctx, kitsuExternalSite[source], id)
 	default:
-		return "", fmt.Errorf("meta: unsupported anime source %q", source)
+		return Info{}, fmt.Errorf("meta: unsupported anime source %q", source)
 	}
 	if err != nil {
-		return "", err
+		return Info{}, err
 	}
-	if title == "" {
-		return "", fmt.Errorf("meta: no title for %s:%s", source, id)
+	if info.Name == "" {
+		return Info{}, fmt.Errorf("meta: no title for %s:%s", source, id)
 	}
-	c.cachePut(key, Info{Name: title})
-	return title, nil
+	c.cachePut(key, info)
+	return info, nil
 }
 
 type kitsuAttributes struct {
 	CanonicalTitle string            `json:"canonicalTitle"`
 	Titles         map[string]string `json:"titles"`
+	StartDate      string            `json:"startDate"`
+	PosterImage    struct {
+		Original string `json:"original"`
+		Large    string `json:"large"`
+		Medium   string `json:"medium"`
+	} `json:"posterImage"`
 }
 
 func (a kitsuAttributes) title() string {
@@ -64,19 +76,19 @@ func (a kitsuAttributes) title() string {
 	return ""
 }
 
-func (c *Client) kitsuTitleByID(ctx context.Context, id string) (string, error) {
+func (c *Client) kitsuInfoByID(ctx context.Context, id string) (Info, error) {
 	var body struct {
 		Data struct {
 			Attributes kitsuAttributes `json:"attributes"`
 		} `json:"data"`
 	}
 	if err := c.getJSON(ctx, c.kitsuURL+"/anime/"+url.PathEscape(id), &body); err != nil {
-		return "", err
+		return Info{}, err
 	}
-	return body.Data.Attributes.title(), nil
+	return body.Data.Attributes.info(), nil
 }
 
-func (c *Client) kitsuTitleByMapping(ctx context.Context, site, id string) (string, error) {
+func (c *Client) kitsuInfoByMapping(ctx context.Context, site, id string) (Info, error) {
 	q := url.Values{}
 	q.Set("filter[externalSite]", site)
 	q.Set("filter[externalId]", id)
@@ -90,14 +102,25 @@ func (c *Client) kitsuTitleByMapping(ctx context.Context, site, id string) (stri
 		} `json:"included"`
 	}
 	if err := c.getJSON(ctx, u, &body); err != nil {
-		return "", err
+		return Info{}, err
 	}
 	for _, inc := range body.Included {
 		if inc.Type == "anime" {
 			if t := inc.Attributes.title(); t != "" {
-				return t, nil
+				return inc.Attributes.info(), nil
 			}
 		}
 	}
-	return "", fmt.Errorf("meta: no kitsu mapping for %s:%s", site, id)
+	return Info{}, fmt.Errorf("meta: no kitsu mapping for %s:%s", site, id)
+}
+
+func (a kitsuAttributes) info() Info {
+	info := Info{Name: a.title(), Year: parseYear(a.StartDate)}
+	for _, candidate := range []string{a.PosterImage.Original, a.PosterImage.Large, a.PosterImage.Medium} {
+		if poster := posterURL(candidate); poster != "" {
+			info.Poster = poster
+			break
+		}
+	}
+	return info
 }

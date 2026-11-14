@@ -1,7 +1,5 @@
-// Package stremio implements seedstrem's Stremio addon: a stream-only
-// manifest plus a stream handler (Prowlarr search) and a resolve-on-play
-// handler that adds the chosen torrent to qBittorrent and redirects to
-// the /dl streaming endpoint.
+// Package stremio implements discovery streams and a read-only catalog of
+// managed torrents currently seeding in the download client.
 package stremio
 
 import (
@@ -71,13 +69,14 @@ type DiskSettings struct {
 // Settings is the live configuration slice the handlers need, fetched per
 // request so config hot-reload takes effect without restart.
 type Settings struct {
-	ExternalURL string
-	Prowlarr    ProwlarrSettings
-	Torrentio   TorrentioSettings
-	Addon       AddonSettings
-	Filters     prowlarr.Filters
-	MaxResults  int
-	Disk        DiskSettings
+	ExternalURL  string
+	ManagedLabel string
+	Prowlarr     ProwlarrSettings
+	Torrentio    TorrentioSettings
+	Addon        AddonSettings
+	Filters      prowlarr.Filters
+	MaxResults   int
+	Disk         DiskSettings
 }
 
 // Handler serves the Stremio addon endpoints.
@@ -114,6 +113,9 @@ func (h *Handler) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(cors)
 	r.Get("/manifest.json", h.manifest)
+	r.Get("/catalog/{type}/{id}", h.seedCatalog)
+	r.Get("/catalog/{type}/{id}/{extra}", h.seedCatalog)
+	r.Get("/meta/{type}/{id}", h.seedMeta)
 	r.Get("/stream/{type}/{id}", h.stream)
 	r.Get("/play/{infohash}", h.play)
 	r.Head("/play/{infohash}", h.play)
