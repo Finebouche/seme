@@ -125,6 +125,9 @@ func (h *Handler) sessionInfo(w http.ResponseWriter, _ *http.Request) {
 // admin passwords are masked on read; sending the mask back (or an
 // empty string) keeps the stored value.
 type configDTO struct {
+	Desktop struct {
+		SetupComplete *bool `json:"setup_complete"`
+	} `json:"desktop"`
 	Server struct {
 		Listen        string `json:"listen"`
 		ExternalURL   string `json:"external_url"`
@@ -232,6 +235,8 @@ type configDTO struct {
 
 func toDTO(cfg config.Config) configDTO {
 	var dto configDTO
+	setupComplete := cfg.Desktop.SetupComplete
+	dto.Desktop.SetupComplete = &setupComplete
 	dto.Transmission.URL = cfg.Transmission.URL
 	dto.Transmission.Username = cfg.Transmission.Username
 	dto.Transmission.Label = cfg.Transmission.Label
@@ -365,6 +370,9 @@ func indexerSeedTimesFromDTO(list []indexerSeedTime) map[string]time.Duration {
 // apply merges a DTO into an existing config, respecting mask/empty
 // semantics for secrets.
 func (dto configDTO) apply(cfg config.Config) config.Config {
+	if dto.Desktop.SetupComplete != nil {
+		cfg.Desktop.SetupComplete = *dto.Desktop.SetupComplete
+	}
 	if dto.Transmission.URL != "" {
 		cfg.Transmission.URL = dto.Transmission.URL
 		cfg.Transmission.Username = dto.Transmission.Username

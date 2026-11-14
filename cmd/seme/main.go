@@ -7,9 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/kipsilabs/seedstrem/internal/cleanup"
 	"github.com/kipsilabs/seedstrem/internal/config"
 	"github.com/kipsilabs/seedstrem/internal/deluge"
+	"github.com/kipsilabs/seedstrem/internal/desktop"
 	"github.com/kipsilabs/seedstrem/internal/downloader"
 	"github.com/kipsilabs/seedstrem/internal/meta"
 	"github.com/kipsilabs/seedstrem/internal/playsession"
@@ -43,9 +46,13 @@ func main() {
 }
 
 func run() error {
+	parentPID := os.Getppid()
 	configPath := flag.String("config", defaultConfigPath(), "path to config.yaml")
 	healthcheck := flag.Bool("healthcheck", false, "probe the local /api/health endpoint and exit (for Docker HEALTHCHECK)")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	desktopMode := flag.Bool("desktop", false, "run the local macOS companion service")
+	desktopDataDir := flag.String("desktop-data-dir", "", "override the companion application's data directory")
+	desktopReady := flag.String("desktop-ready", "", "private readiness file for the companion application")
 	flag.Parse()
 
 	if *showVersion {
@@ -53,14 +60,39 @@ func run() error {
 		return nil
 	}
 
-	cfg, err := config.Load(*configPath)
+	if !*desktopMode && (*desktopDataDir != "" || *desktopReady != "") {
+		return errors.New("desktop options require --desktop")
+	}
+	loadConfig := config.Load
+	if *desktopMode {
+		path, err := desktop.Prepare(*desktopDataDir)
+		if err != nil {
+			return err
+		}
+		*configPath = path
+		// The application owns its local endpoint and isolated storage;
+		// shell/container overrides must not redirect it to another instance.
+		loadConfig = config.LoadFile
+	}
+	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		return err
+	}
+	if *desktopMode {
+		// Enforce the desktop boundary at the point of use as well as on disk.
+		cfg.Server.Listen = desktop.Listen
+		cfg.Server.ExternalURL = desktop.URL
+		cfg.Storage.Database = filepath.Join(filepath.Dir(*configPath), "seme.db")
 	}
 
 	if *healthcheck {
 		return probeHealth(cfg.Server.Listen)
 	}
+	listener, err := net.Listen("tcp", cfg.Server.Listen)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", cfg.Server.Listen, err)
+	}
+	defer listener.Close()
 
 	logger := newLogger(cfg.Log.Level)
 	slog.SetDefault(logger)
@@ -75,9 +107,11 @@ func run() error {
 			logger.Warn("could not persist generated secrets; they will change on restart",
 				"error", err, "config", *configPath)
 		}
-		logger.Info("generated admin password (also saved to config)",
-			"admin_password", cfg.Server.AdminPassword,
-			"config", *configPath)
+		if !*desktopMode {
+			logger.Info("generated admin password (also saved to config)",
+				"admin_password", cfg.Server.AdminPassword,
+				"config", *configPath)
+		}
 	}
 
 	db, err := store.Open(cfg.Storage.Database)
@@ -222,24 +256,62 @@ func run() error {
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Info("Sème listening", "addr", cfg.Server.Listen, "version", version)
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
+	if *desktopMode && *desktopReady != "" {
+		if err := desktop.WriteReady(*desktopReady, cfg); err != nil {
+			_ = httpServer.Close()
+			return fmt.Errorf("publish desktop readiness: %w", err)
+		}
+		defer os.Remove(*desktopReady)
+	}
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(quit)
+	parentCtx, stopParentWatch := context.WithCancel(context.Background())
+	defer stopParentWatch()
+	var parentGone <-chan struct{}
+	if *desktopMode {
+		parentGone = watchParent(parentCtx, parentPID)
+	}
 
 	select {
 	case err := <-errCh:
 		return err
 	case sig := <-quit:
 		logger.Info("shutting down", "signal", sig.String())
+	case <-parentGone:
+		logger.Info("desktop application exited; shutting down companion service")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	return httpServer.Shutdown(ctx)
+}
+
+// A force-quit or crash of the native app must not leave its helper behind.
+// Normal app termination sends SIGTERM; reparenting covers abrupt termination.
+func watchParent(ctx context.Context, parentPID int) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if os.Getppid() != parentPID {
+					close(done)
+					return
+				}
+			}
+		}
+	}()
+	return done
 }
 
 // buildDownloadClient constructs the download client selected by

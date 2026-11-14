@@ -23,6 +23,7 @@ import (
 
 // Config is the root configuration document.
 type Config struct {
+	Desktop      Desktop      `yaml:"desktop"`
 	Server       Server       `yaml:"server"`
 	Transmission Transmission `yaml:"transmission"`
 	Torrentio    Torrentio    `yaml:"torrentio"`
@@ -40,6 +41,11 @@ type Config struct {
 	Seeding      Seeding      `yaml:"seeding"`
 	RSS          RSS          `yaml:"rss"`
 	Log          Log          `yaml:"log"`
+}
+
+// Desktop stores the native application's first-run progress.
+type Desktop struct {
+	SetupComplete bool `yaml:"setup_complete"`
 }
 
 type Server struct {
@@ -413,7 +419,7 @@ func Default() Config {
 			DeletePolicy:         DeletePolicyOldestFirst,
 			HistoryRetention:     30 * 24 * time.Hour,
 		},
-		Seeding: Seeding{Full: true},
+		Seeding: Seeding{Full: false},
 		RSS: RSS{
 			Enabled:          false,
 			Interval:         15 * time.Minute,
@@ -428,6 +434,16 @@ func Default() Config {
 // overrides, and validates the result. A missing file is not an error:
 // defaults + env are used.
 func Load(path string) (Config, error) {
+	return load(path, os.Getenv)
+}
+
+// LoadFile reads a config without process environment overrides. Native desktop
+// launches use their own persisted settings rather than a shell/server config.
+func LoadFile(path string) (Config, error) {
+	return load(path, nil)
+}
+
+func load(path string, getenv func(string) string) (Config, error) {
 	cfg := Default()
 
 	data, err := os.ReadFile(path)
@@ -449,7 +465,9 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("read config %s: %w", path, err)
 	}
 
-	applyEnv(&cfg, os.Getenv)
+	if getenv != nil {
+		applyEnv(&cfg, getenv)
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

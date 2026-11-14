@@ -180,11 +180,10 @@ cleanup:
   #   Nyaa: 12h
 
 seeding:
-  # Download the whole torrent (played file first, the rest afterwards) so
-  # a complete copy is available to seed — better for ratio on private
-  # trackers. Set false to download only the played file (less disk, but
-  # you seed only that file).
-  full: true
+  # Download only the played file and keep its pieces available to share.
+  # Set true to download the entire torrent, including other episodes in
+  # a season pack, with the played file prioritized.
+  full: false
 
 rss:
   # Background grabber: periodically pull the just-released items from your

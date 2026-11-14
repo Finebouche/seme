@@ -12,7 +12,21 @@ Stremio → sources Sème → Torrentio (recherche)
 
 Cinemeta et OpenSubtitles restent utilisables. Une lecture choisie directement dans Torrentio ne passe pas par Sème : choisissez une source **Sème**. Aucun service de débridage n'est nécessaire. Les réponses Torrentio contenant uniquement une URL de débridage sont ignorées.
 
-## Démarrer en local
+## Application Mac
+
+Sur macOS 13 ou plus récent, **Sème.app** contient le serveur et son interface : aucun Terminal, Go ou Node.js n’est nécessaire pour l’utiliser. Transmission et Stremio restent des applications séparées.
+
+1. Glissez **Sème.app** dans **Applications**, puis ouvrez-la.
+2. L’assistant vous guide pour activer et tester l’accès distant de Transmission, choisir un dossier avec le sélecteur natif macOS et configurer Torrentio.
+3. Cliquez sur **Install in Stremio**, puis confirmez l’installation dans Stremio.
+
+Fermer la fenêtre laisse Sème dans la barre des menus. Le démarrage à l’ouverture de session est facultatif. Quitter Sème arrête la lecture locale, mais Transmission continue de télécharger et de partager.
+
+L’application utilise `http://127.0.0.1:17880` et conserve ses réglages dans `~/Library/Application Support/Seme/`, séparément du `config.yaml` de développement. Son assistant télécharge uniquement le fichier choisi et conserve les données pour le seed.
+
+Pour construire l’application : `make mac-app` ; pour produire aussi un installateur : `CREATE_DMG=1 make mac-app`. Les fichiers sont créés dans `dist/`. Le build local possède une signature ad hoc ; une distribution publique sans avertissement Gatekeeper nécessite une signature Developer ID et une notarisation Apple. Voir le [guide macOS](docs/macos.md).
+
+## Démarrer en local avec le Terminal
 
 Prérequis : Go 1.25 ou plus récent, Node.js 22 et npm, Transmission **4.1 ou plus récent** recommandé. Transmission 4.0 permet l'ajout isolé par label mais pas la priorisation séquentielle nécessaire à une lecture fluide avant la fin du téléchargement ; les versions antérieures sont refusées à l'ajout.
 
@@ -39,7 +53,7 @@ Les variables `SEME_*` permettent de surcharger la configuration ; les anciennes
 - `cleanup.keep_forever: true` désactive les suppressions automatiques, y compris pour une lecture interrompue. C'est le réglage par défaut.
 - Les torrents ajoutés dans Transmission portent le label Sème ; Sème refuse de modifier ou d'adopter un torrent existant sans ce label. Les opérations de suppression et de priorité revérifient le label.
 - Les limites globales de ratio et d'inactivité de Transmission sont désactivées **pour les torrents ajoutés par Sème**, afin qu'ils puissent continuer de seeder. Les réglages globaux et les autres torrents ne sont pas modifiés.
-- `seeding.full: true` télécharge le torrent entier, en donnant la priorité au fichier choisi. Pour un pack de saison cela télécharge aussi les autres épisodes. Avec `false`, seul le fichier joué est sélectionné ; les données obtenues restent partageables.
+- `seeding.full: false` est le réglage par défaut : seul le fichier joué est sélectionné, et les données obtenues restent partageables après le visionnage. Avec `true`, le torrent entier est téléchargé, y compris les autres épisodes d’un pack de saison, en donnant la priorité au fichier choisi.
 - Pour un nettoyage automatique volontaire, désactivez `keep_forever`, puis choisissez les seuils de durée/ratio. `storage.delete_files_on_remove` contrôle la suppression des données et vaut `false` par défaut. Une suppression manuelle explicite reste possible.
 
 ## Lecture pendant le téléchargement
