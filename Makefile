@@ -1,38 +1,20 @@
-BINARY := seme
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X main.version=$(VERSION)
+NODE ?= node
 
-.PHONY: build web-build test lint vet fmt run docker clean mac-app
+.PHONY: build test check clean integration-test integration-app mac-app
 
-mac-app:
-	VERSION="$(VERSION)" ./scripts/build-macos.sh
-
-build: web-build
-	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/seme
-
-go-build:
-	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/seme
-
-web-build:
-	cd web && npm run build
+build:
+	./scripts/build-stremio-integration.sh
 
 test:
-	go test -race -cover ./...
+	$(NODE) --test stremio-integration/test/*.test.cjs
 
-vet:
-	go vet ./...
+check:
+	@for source in stremio-integration/*.cjs stremio-integration/lib/*.cjs; do $(NODE) --check "$$source" || exit; done
+	bash -n scripts/build-stremio-integration.sh
 
-lint:
-	golangci-lint run
-
-fmt:
-	gofmt -w .
-
-run:
-	go run ./cmd/seme --config ./config.yaml
-
-docker:
-	docker build -t seme:latest .
+# Keep existing integration commands and the macOS build shortcut working.
+integration-test: test
+integration-app mac-app: build
 
 clean:
-	rm -rf bin coverage.out
+	rm -rf -- "dist/Sème Setup.app" "dist/Seme-Stremio-Integration-macos.zip"

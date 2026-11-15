@@ -1,6 +1,0 @@
-#!/usr/bin/with-contenv bash
-
-# Run seme as the mapped user (PUID/PGID -> abc) set up by the
-# LinuxServer base image's init-adduser step. The config lives on the
-# /config volume, which init-adduser owns via the mapped user.
-exec s6-setuidgid abc /seme --config=/config/config.yaml

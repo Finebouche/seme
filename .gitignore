@@ -1,39 +1,20 @@
-# Binaries
-/seedstrem
-/bin/
+# Generated application and archives
 /dist/
 
-# Test artifacts
+# Test output
+/coverage/
 coverage.out
-*.test
 
-# Web
-web/node_modules/
-web/dist/*
-!web/dist/.gitkeep
-
-# Local state
-*.db
+# Local settings and data, including those retained from the old application
 config.yaml
-!config.example.yaml
+*.db
+*.db-shm
+*.db-wal
+/seme-config/
+.env
 
-# Python
-__pycache__/
-*.pyc
-
-# Editor/OS
+# Editor and OS files
 .DS_Store
 .idea/
 .vscode/
-
-# Superpowers brainstorm scratch
 .superpowers/
-
-# Sème local state and build metadata
-/seme
-*.db-shm
-*.db-wal
-web/*.tsbuildinfo
-
-/seme-config/
-.env
