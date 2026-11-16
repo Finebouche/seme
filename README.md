@@ -12,7 +12,7 @@ Sa deuxième source d’inspiration est
 intégrer le transfert du cache directement dans Stremio pour continuer à partager
 les vidéos avec un client torrent, sans application Sème à garder ouverte.
 
-L’intégration **0.4.1, expérimentale** s’exécute directement dans le
+L’intégration **0.4.3, expérimentale** s’exécute directement dans le
 serveur local de Stremio. Stremio continue à rechercher les sources et à lire les
 vidéos avec les extensions choisies par l’utilisateur. Sème ne dépend d’aucun
 fournisseur de sources : il récupère les vidéos complètes du cache torrent local
@@ -35,7 +35,7 @@ Stremio + ses extensions → lecture et cache torrent
 **Pas de processus Sème permanent séparé.** Le module expose une extension
 compagnon locale sur `http://127.0.0.1:17881`, dans le processus Node existant de
 Stremio. Son entrée **Sème** dans les extensions permet d’ouvrir **Configure**
-pour accéder aux réglages et à l’état du module. Elle ne fournit aucune source
+pour ouvrir l’application **Sème Setup** via un relais local. Elle ne fournit aucune source
 vidéo et ne remplace pas les extensions habituelles. La fenêtre **Sème Setup**
 sert aux réglages et à l’installation ; elle peut être fermée. Après le transfert, seul le client torrent doit rester ouvert
 pour continuer à partager, avec l’ordinateur éveillé et connecté.
@@ -55,9 +55,18 @@ pour continuer à partager, avec l’ordinateur éveillé et connecté.
 4. Quittez complètement Stremio, puis cliquez sur **Install integration**.
 5. Rouvrez Stremio, puis cliquez sur **Add to Stremio** dans Sème Setup.
    Confirmez l’installation de **Sème** dans Stremio. Le bouton **Configure** de
-   cette extension ouvre sa page locale de réglages et de statut.
+   cette extension ouvre **Sème Setup** via une page relais. Autorisez l’ouverture
+   de l’application si le navigateur le demande. Un bouton permet de réessayer ;
+   la configuration web reste accessible en secours. Ouvrez une fois la nouvelle
+   application depuis le Finder pour enregistrer son lien `seme://configure`.
 6. Regardez normalement vos sources torrent directes. Vous pouvez fermer
    Sème Setup et la page de configuration.
+
+Après une mise à jour de Stremio, quittez-le et cliquez de nouveau sur
+**Install integration**. Sème Setup vérifie la signature officielle et l’intégrité
+de la nouvelle version avant de sauvegarder son serveur et de réinstaller Sème.
+Il conserve vos réglages, les vidéos et les anciennes sauvegardes ; une version
+modifiée ou signée par un éditeur inconnu reste refusée.
 
 Le module examine le cache toutes les 30 secondes pendant que le serveur Stremio
 tourne. Il copie les vidéos entièrement disponibles, vérifie leurs morceaux,
@@ -76,6 +85,11 @@ supprime uniquement son entrée visible : utilisez **Uninstall** dans Sème Setu
 pour retirer le module du serveur. Voir le [guide de l’intégration](docs/stremio-integration.md).
 
 ## Données et conservation
+
+- Les nouveaux dossiers portent le nom du torrent, sans extension vidéo pour
+  un fichier unique. Un suffixe court est ajouté uniquement si un nom est déjà
+  utilisé. Le hash reste l’identifiant interne ; les noms des fichiers torrent
+  ne sont pas modifiés.
 
 - Aucun second téléchargement des morceaux déjà vérifiés n’est demandé. Les
   copies locales sont indépendantes du cache ; APFS peut les cloner pour limiter
@@ -123,7 +137,7 @@ Apple, pas Go ni le frontend React. L’installateur local possède une signatur
 ad hoc, sans notarisation Apple. Aucune publication n’est effectuée.
 
 Les anciennes versions avec serveur Go et interface React ont été retirées
-de ce dépôt ; l’extension compagnon 0.4.1 utilise uniquement le module intégré
+de ce dépôt ; l’extension compagnon 0.4.3 utilise uniquement le module intégré
 actuel, sans réintroduire ces composants. Si vous migrez depuis Sème 0.2, quittez son application
 et retirez son extension de Stremio. Les torrents déjà ajoutés restent dans leur
 client. Les commandes `make integration-test`, `make integration-app` et

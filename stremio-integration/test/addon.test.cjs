@@ -34,7 +34,7 @@ function request(endpoint, pathname, options = {}) {
 }
 
 async function form(endpoint, extra = {}) {
-  const page = await request(endpoint, '/configure');
+  const page = await request(endpoint, '/configure?web=1');
   const csrf = page.body.match(/name="csrf" value="([a-f0-9]{64})"/)[1];
   const config = await loadConfig(endpoint.file);
   return new URLSearchParams({ csrf, enabled: '1', clientType: config.client.type, clientUrl: config.client.url,
@@ -55,6 +55,12 @@ test('loopback manifest is configurable, minimal and does not add homepage catal
   assert.equal(manifest.id, MANIFEST_ID);
   assert.equal(manifest.version, VERSION);
   assert.equal(manifest.name, 'Sème');
+  assert.equal(manifest.logo, endpoint.url + '/icon.png');
+  const icon = await request(endpoint, '/icon.png');
+  assert.equal(icon.status, 200);
+  assert.equal(icon.headers['content-type'], 'image/png');
+  assert.equal(icon.headers['access-control-allow-origin'], '*');
+  assert.ok(icon.body.includes('PNG'));
   assert.deepEqual(manifest.behaviorHints, { configurable: true, configurationRequired: false });
   assert.deepEqual(manifest.catalogs, []);
   assert.deepEqual(manifest.resources, ['meta']);
@@ -70,7 +76,7 @@ test('loopback manifest is configurable, minimal and does not add homepage catal
 
 test('configuration page escapes fields, never renders passwords and explains removal', async t => {
   const endpoint = await fixture(t, { client: { type: 'transmission', url: 'http://localhost:9091', username: '\"><script>bad()</script>', password: 'private-secret-123' } });
-  const response = await request(endpoint, '/configure/');
+  const response = await request(endpoint, '/configure/?web=1');
   assert.equal(response.status, 200);
   assert.equal(response.headers['access-control-allow-origin'], undefined);
   assert.equal(response.headers['cache-control'], 'no-store');
@@ -88,7 +94,7 @@ test('saving preserves blank passwords and unknown fields; explicit replacement 
   const endpoint = await fixture(t);
   let response = await post(endpoint, await form(endpoint, { username: 'bob' }));
   assert.equal(response.status, 303);
-  assert.equal(response.headers.location, '/configure?saved=1');
+  assert.equal(response.headers.location, '/configure?web=1&saved=1');
   let saved = await loadConfig(endpoint.file);
   assert.equal(saved.client.password, 'private-secret-123');
   assert.equal(saved.client.username, 'bob');
@@ -98,8 +104,8 @@ test('saving preserves blank passwords and unknown fields; explicit replacement 
   response = await post(endpoint, await form(endpoint, { password: 'replacement-secret' }));
   assert.equal(response.status, 303);
   assert.equal((await loadConfig(endpoint.file)).client.password, 'replacement-secret');
-  assert.doesNotMatch((await request(endpoint, '/configure?saved=1')).body, /replacement-secret/);
-  assert.match((await request(endpoint, '/configure?saved=1')).body, /Réglages enregistrés/);
+  assert.doesNotMatch((await request(endpoint, '/configure?web=1&saved=1')).body, /replacement-secret/);
+  assert.match((await request(endpoint, '/configure?web=1&saved=1')).body, /Réglages enregistrés/);
   response = await post(endpoint, await form(endpoint, { clearPassword: '1' }));
   assert.equal(response.status, 303);
   assert.equal((await loadConfig(endpoint.file)).client.password, '');
@@ -138,23 +144,23 @@ test('runtime status exposes only validated dates, counts and safe error labels'
   const statusFile = path.join(endpoint.dir, 'status.json');
   await fs.writeFile(statusFile, JSON.stringify({ lastScan: '2026-11-15T12:34:56.000Z', imported: 3,
     errors: [{ code: 'ECONNREFUSED', message: 'private-secret-123' }] }));
-  let response = await request(endpoint, '/configure');
+  let response = await request(endpoint, '/configure?web=1');
   assert.match(response.body, /2026-11-15 12:34:56 UTC/);
   assert.match(response.body, /3 transfert\(s\) lors de cette analyse/);
   assert.match(response.body, /Client torrent injoignable/);
   assert.doesNotMatch(response.body, /private-secret/);
   await fs.writeFile(statusFile, JSON.stringify({ lastScan: '<script>secret</script>', imported: '<secret>', errors: [{ code: '<script>secret</script>', message: 'private-secret' }] }));
-  response = await request(endpoint, '/configure');
+  response = await request(endpoint, '/configure?web=1');
   assert.doesNotMatch(response.body, /<script>|private-secret|&lt;secret&gt;/);
   assert.match(response.body, /Aucune analyse récente/);
   await fs.writeFile(statusFile, '{bad-private-secret');
-  assert.doesNotMatch((await request(endpoint, '/configure')).body, /bad-private-secret/);
+  assert.doesNotMatch((await request(endpoint, '/configure?web=1')).body, /bad-private-secret/);
 });
 
 test('missing config is configurable, malformed config is never overwritten', async t => {
   const endpoint = await fixture(t);
   await fs.unlink(endpoint.file);
-  const response = await request(endpoint, '/configure');
+  const response = await request(endpoint, '/configure?web=1');
   assert.equal(response.status, 200);
   assert.match(response.body, /Enregistrez vos réglages/);
   await fs.writeFile(endpoint.file, 'private-secret-invalid-json');
@@ -178,7 +184,7 @@ test('port conflicts reject readiness gracefully and stopping is idempotent', as
 
 test('public addon routes allow CORS and private-network preflight without exposing configuration', async t => {
   const endpoint = await fixture(t);
-  for (const route of ['/manifest.json', '/meta/other/seme:test.json']) {
+  for (const route of ['/manifest.json', '/icon.png', '/meta/other/seme:test.json']) {
     const response = await request(endpoint, route, { method: 'OPTIONS', headers: { Origin: 'https://web.stremio.com',
       'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Private-Network': 'true' } });
     assert.equal(response.status, 204);
@@ -193,4 +199,23 @@ test('public addon routes allow CORS and private-network preflight without expos
   assert.equal(configuration.status, 403);
   assert.equal(configuration.headers['access-control-allow-origin'], undefined);
   assert.equal(configuration.headers['access-control-allow-private-network'], undefined);
+});
+
+
+test('Configure launches only the fixed native URL without exposing settings; web fallback remains explicit', async t => {
+  const endpoint = await fixture(t);
+  const before = await fs.readFile(endpoint.file, 'utf8');
+  for (const route of ['/configure', '/configure/', '/configure?target=https://evil.test']) {
+    const response = await request(endpoint, route);
+    assert.equal(response.status, 200);
+    assert.match(response.body, /href="seme:\/\/configure"/);
+    assert.match(response.body, /window.location.href = 'seme:\/\/configure'/);
+    assert.match(response.body, /href="\/configure\?web=1"/);
+    assert.doesNotMatch(response.body, /private-secret|alice|evil.test|name="password"/);
+    assert.equal(response.headers['access-control-allow-origin'], undefined);
+    const nonce = response.body.match(/<script nonce="([A-Za-z0-9+/=]+)">/)[1];
+    assert.ok(response.headers['content-security-policy'].includes("script-src 'nonce-" + nonce + "'"));
+  }
+  assert.equal(await fs.readFile(endpoint.file, 'utf8'), before);
+  assert.equal((await request(endpoint, '/configure', { headers: { Origin: 'https://evil.test' } })).status, 403);
 });

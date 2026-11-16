@@ -16,7 +16,7 @@ function encode(value) {
   return Buffer.concat([Buffer.from('d'), ...Object.keys(value).sort().flatMap(key => [encode(key), encode(value[key])]), Buffer.from('e')]);
 }
 
-async function fixture(t) {
+async function fixture(t, torrentName = 'Season') {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'seme-runtime-test-'));
   t.after(() => fs.rm(temp, { recursive: true, force: true }));
   const config = validateConfig({ cacheDir: path.join(temp, 'cache'), destinationDir: path.join(temp, 'preserved'), minFreeBytes: 0,
@@ -25,7 +25,7 @@ async function fixture(t) {
   const names = ['before.bin', 'episode1.mkv', 'episode2.mkv', 'episode3.mkv'];
   const all = Buffer.concat(contents), pieces = [];
   for (let i = 0; i < all.length; i += 4) pieces.push(crypto.createHash('sha1').update(all.subarray(i, i + 4)).digest());
-  const info = encode({ name: 'Season', 'piece length': 4, pieces: Buffer.concat(pieces), files: contents.map((data, i) => ({ length: data.length, path: [names[i]] })) });
+  const info = encode({ name: torrentName, 'piece length': 4, pieces: Buffer.concat(pieces), files: contents.map((data, i) => ({ length: data.length, path: [names[i]] })) });
   const hash = crypto.createHash('sha1').update(info).digest('hex');
   const torrent = Buffer.concat([Buffer.from('d4:info'), info, Buffer.from('e')]);
   const source = path.join(config.cacheDir, hash);
@@ -34,16 +34,16 @@ async function fixture(t) {
   await fs.writeFile(path.join(source, 'bitfield'), Buffer.from([0xe0]));
   for (let i = 0; i < contents.length; i++) await fs.writeFile(path.join(source, String(i)), contents[i]);
   const stateDir = path.join(temp, 'state');
-  const client = new FakeClient(contents, names);
+  const client = new FakeClient(contents, names, torrentName);
   const run = () => scan(config, { stateDir, client, verifyTimeoutMs: 100 });
-  const savePath = path.join(config.destinationDir, hash);
+  const savePath = path.join(config.destinationDir, torrentName);
   // Journal identity includes the canonical destination used by runtime.
   const journalPath = async () => path.join(stateDir, identity({ ...config, destinationDir: await fs.realpath(config.destinationDir) }), `${hash}.json`);
   return { temp, config, source, hash, torrent, contents, names, stateDir, client, run, savePath, journalPath };
 }
 
 class FakeClient {
-  constructor(contents, names) { this.contents = contents; this.names = names; this.events = []; this.live = null; this.failVerification = false; this.loseAddResponse = false; this.verified = false; }
+  constructor(contents, names, torrentName) { this.contents = contents; this.names = names; this.torrentName = torrentName; this.events = []; this.live = null; this.failVerification = false; this.loseAddResponse = false; this.verified = false; }
   async inspect(hash) { return this.live && this.live.hash === hash ? { ...this.live, files: this.live.files.map(file => ({ ...file })) } : null; }
   async addPaused({ hash, torrent, savePath, selected, files }) {
     assert.equal(this.live, null, 'add must never replace an existing torrent');
@@ -68,7 +68,7 @@ class FakeClient {
     this.events.push({ action: 'waitVerified', selected: [...selected] });
     if (this.failVerification) { const error = new Error('Verification failed'); error.code = 'VERIFY_FAILED'; throw error; }
     for (const index of selected) {
-      assert.deepEqual(await fs.readFile(path.join(this.live.savePath, 'Season', this.names[index])), this.contents[index], `selected file ${index} must be complete before resume`);
+      assert.deepEqual(await fs.readFile(path.join(this.live.savePath, this.torrentName, this.names[index])), this.contents[index], `selected file ${index} must be complete before resume`);
       this.live.files[index].completed = this.contents[index].length;
     }
     this.verified = true;
@@ -87,6 +87,8 @@ test('initial transfer adds stopped, selects one episode, verifies before resume
   assert.equal((await fs.stat(path.join(f.savePath, 'Season/episode2.mkv'))).size, 3);
   await assert.rejects(fs.stat(path.join(f.savePath, 'Season/episode3.mkv')), { code: 'ENOENT' });
   const job = JSON.parse(await fs.readFile(await f.journalPath(), 'utf8'));
+  assert.equal(job.hash, f.hash);
+  assert.equal(job.savePath, path.join(await fs.realpath(f.config.destinationDir), 'Season'));
   assert.equal(job.phase, 'ready'); assert.deepEqual(job.selected, [1]); assert.equal(job.pending, undefined);
   f.client.events.length = 0;
   assert.equal((await f.run()).imported, 0);
@@ -214,7 +216,7 @@ test('interruption immediately after snapshot move recovers without adopting unr
   let interrupted = false;
   fs.rename = async (from, to) => {
     const result = await originalRename(from, to);
-    if (path.basename(to) === f.hash && String(from).includes('.seme-staging')) {
+    if (String(from).includes('.seme-staging') && String(to).endsWith('/preserved/Season/Season')) {
       interrupted = true;
       const error = new Error('Simulated interruption after rename'); error.code = 'INTERRUPTED'; throw error;
     }
@@ -319,5 +321,90 @@ test('expired metadata-only caches are skipped without hiding real cache errors'
   await fs.writeFile(path.join(f.source, 'cache'), 'invalid bencode');
   report = await f.run();
   assert.ok(report.errors.some(error => error.code === 'CACHE_UNAVAILABLE'));
+  assert.deepEqual(f.client.events, []);
+});
+
+test('foreign destination symlink is left intact and new import uses a short hash suffix', async t => {
+  const f = await fixture(t);
+  await fs.mkdir(f.config.destinationDir);
+  const foreign = path.join(f.temp, 'foreign-library');
+  await fs.mkdir(foreign);
+  await fs.writeFile(path.join(foreign, 'keep.txt'), 'keep');
+  await fs.symlink(foreign, f.savePath);
+  const report = await f.run();
+  assert.equal(report.imported, 1); assert.deepEqual(report.errors, []);
+  const actual = path.join(await fs.realpath(f.config.destinationDir), `Season [${f.hash.slice(0, 8)}]`);
+  assert.equal(f.client.live.savePath, actual);
+  assert.equal((await fs.lstat(f.savePath)).isSymbolicLink(), true);
+  assert.deepEqual(await fs.readdir(foreign), ['keep.txt']);
+  assert.equal(JSON.parse(await fs.readFile(await f.journalPath(), 'utf8')).savePath, actual);
+});
+
+test('actual UTF8 torrent titles become readable folders and continue to merge later episodes', async t => {
+  const name = 'Amélie — 東京 🎬';
+  const f = await fixture(t, name);
+  assert.equal((await f.run()).imported, 1);
+  assert.equal(path.basename(f.client.live.savePath), name);
+  await fs.writeFile(path.join(f.source, 'bitfield'), Buffer.from([0xf0]));
+  const report = await f.run();
+  assert.equal(report.imported, 1); assert.deepEqual(report.errors, []);
+  assert.deepEqual(await fs.readFile(path.join(f.savePath, name, 'episode2.mkv')), f.contents[2]);
+  assert.equal(JSON.parse(await fs.readFile(await f.journalPath(), 'utf8')).hash, f.hash);
+});
+
+test('a destination appearing between selection and reservation is never overwritten', async t => {
+  const f = await fixture(t);
+  const originalMkdir = fs.mkdir;
+  let collision = false;
+  fs.mkdir = async (directory, options) => {
+    if (!collision && String(directory).endsWith('/preserved/Season')) {
+      collision = true;
+      await originalMkdir(directory, options);
+      await fs.writeFile(path.join(directory, 'foreign.txt'), 'untouched');
+      const error = new Error('Concurrent directory'); error.code = 'EEXIST'; throw error;
+    }
+    return originalMkdir(directory, options);
+  };
+  let report;
+  try { report = await f.run(); }
+  finally { fs.mkdir = originalMkdir; }
+  assert.equal(collision, true);
+  assert.equal(report.imported, 1); assert.deepEqual(report.errors, []);
+  assert.ok(f.client.live.savePath.endsWith(`Season [${f.hash.slice(0, 8)}]`));
+  assert.equal(await fs.readFile(path.join(f.savePath, 'foreign.txt'), 'utf8'), 'untouched');
+  assert.deepEqual(await fs.readdir(f.savePath), ['foreign.txt']);
+});
+
+test('legacy hash directories keep their paths during later episode imports', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.run()).imported, 1);
+  const legacyPath = path.join(await fs.realpath(f.config.destinationDir), f.hash);
+  await fs.rename(f.client.live.savePath, legacyPath);
+  f.client.live.savePath = legacyPath;
+  const jobFile = await f.journalPath();
+  const job = JSON.parse(await fs.readFile(jobFile, 'utf8'));
+  job.savePath = legacyPath;
+  delete job.destinationName;
+  await fs.writeFile(jobFile, JSON.stringify(job));
+  await fs.writeFile(path.join(f.source, 'bitfield'), Buffer.from([0xf0]));
+  const report = await f.run();
+  assert.equal(report.imported, 1); assert.deepEqual(report.errors, []);
+  assert.equal(f.client.live.savePath, legacyPath);
+  assert.deepEqual(await fs.readFile(path.join(legacyPath, 'Season/episode2.mkv')), f.contents[2]);
+  await assert.rejects(fs.lstat(f.savePath), { code: 'ENOENT' });
+});
+
+test('persisted relocation blocks scans even when the ready job has no new cache data', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.run()).imported, 1);
+  const jobFile = await f.journalPath();
+  const job = JSON.parse(await fs.readFile(jobFile, 'utf8'));
+  job.relocation = { from: job.savePath, to: path.join(f.config.destinationDir, 'new') };
+  await fs.writeFile(jobFile, JSON.stringify(job));
+  await fs.rm(f.config.cacheDir, { recursive: true, force: true });
+  f.client.events.length = 0;
+  const report = await f.run();
+  assert.equal(report.imported, 0);
+  assert.deepEqual(report.errors, [{ hash: f.hash, code: 'MIGRATION_REQUIRED' }]);
   assert.deepEqual(f.client.events, []);
 });

@@ -1,6 +1,6 @@
 # Intégration directe dans Stremio
 
-Sème 0.4.1 est un module CommonJS chargé par `server.js` dans le serveur local
+Sème 0.4.3 est un module CommonJS chargé par `server.js` dans le serveur local
 Stremio. Il vit dans le processus Node existant de Stremio, sans processus
 permanent supplémentaire, tâche macOS ni service de lancement à la connexion.
 Ce même module expose une extension compagnon et sa page **Configure** sur
@@ -37,16 +37,29 @@ Après avoir quitté Stremio, utilisez **Install integration** dans Sème Setup
 pour installer ou mettre à jour le module chargé par son serveur. Rouvrez ensuite
 Stremio et utilisez **Add to Stremio** dans Sème Setup. Ce bouton vérifie le
 manifeste local, puis ouvre l’écran d’installation des extensions dans Stremio.
-Confirmez l’ajout de **Sème** : son bouton **Configure** ouvre les réglages et
-l’état du module. La page est aussi accessible à
-`http://127.0.0.1:17881/configure` pendant que le serveur Stremio fonctionne.
+Confirmez l’ajout de **Sème** : son bouton **Configure** passe par
+`http://127.0.0.1:17881/configure`, qui tente d’ouvrir **Sème Setup** avec le lien
+`seme://configure`. Stremio impose cette route HTTP pour son bouton ; le navigateur
+peut demander une confirmation ou un clic sur **Ouvrir Sème Setup**. Ouvrez une fois
+la nouvelle application depuis le Finder pour enregistrer son protocole auprès de
+macOS. Le lien ne transmet aucun réglage ni identifiant et remet au premier plan
+la fenêtre existante sans remplacer les saisies en cours.
+
+La configuration web reste accessible en secours à
+`http://127.0.0.1:17881/configure?web=1` pendant que le serveur Stremio fonctionne.
 
 Le manifeste `http://127.0.0.1:17881/manifest.json` porte l’identifiant
-`org.finebouche.seme`, la version `0.4.1` et l’indication `configurable`. Cette
+`org.finebouche.seme`, la version `0.4.3` et l’indication `configurable`. Cette
 extension n’ajoute ni catalogue ni source vidéo : le transfert continue à lire
 directement le cache de Stremio. Le serveur HTTP est limité à l’adresse de boucle
 locale ; il utilise le processus Node déjà ouvert par Stremio. Stremio doit donc
-être ouvert pour ajouter l’extension ou consulter sa configuration.
+être ouvert pour ajouter l’extension ou utiliser le bouton Configure. Sème Setup
+peut également être ouvert directement lorsque Stremio est fermé.
+
+Le logo de graine est servi localement à `/icon.png`. Si une ancienne fiche garde
+l’icône de puzzle, réutilisez **Add to Stremio** pour actualiser son manifeste.
+Si Stremio conserve encore l’ancienne fiche, retirez seulement son entrée dans
+les extensions puis ajoutez-la à nouveau ; cela ne désinstalle pas le module.
 
 Les deux installations ont des rôles distincts : **Install integration** modifie
 le serveur, tandis que **Add to Stremio** enregistre son entrée visible dans
@@ -95,9 +108,43 @@ NODE=/Applications/Stremio.app/Contents/MacOS/node
 
 `--config /chemin/config.json` isole une installation de test. `configure` lit le
 JSON sur l’entrée standard, sans mot de passe dans les arguments de processus.
-`defaults` propose la configuration initiale. Après une mise à jour connue et
-inspectée de Stremio, `install --accept-update` peut enregistrer une nouvelle
-sauvegarde ; il refuse un fichier contenant encore un bloc Sème modifié.
+`defaults` propose la configuration initiale. Après une mise à jour de Stremio,
+quittez Stremio puis utilisez **Install integration** : si le fichier a changé,
+Sème vérifie l’intégrité du paquet macOS, sa signature Developer ID officielle
+(West Bridge Ltd, équipe `BH62GT22G7`, application `com.westbridge.stremio5-mac`)
+et la protection de `server.js` par cette signature avant de le sauvegarder et
+de réinstaller le module. Les anciennes sauvegardes, les réglages et les vidéos
+sont conservés. Une signature invalide, un autre éditeur ou un bloc Sème résiduel
+font échouer cette adoption automatique. La vérification de signature ne garantit
+pas la compatibilité fonctionnelle avec chaque future version de Stremio.
+
+La commande `install` utilise la même vérification. `install --accept-update`
+reste un recours manuel pour une distribution déjà inspectée : cette option
+contourne la vérification automatique et refuse toujours un bloc Sème modifié.
+
+## Noms des dossiers et migration
+
+Les nouveaux imports utilisent un dossier nommé d’après le torrent. Les noms
+sont adaptés au système de fichiers ; les collisions reçoivent un suffixe court.
+Les journaux restent identifiés par hash et les anciens dossiers restent valides.
+
+Pour migrer les anciens dossiers avec Transmission, quittez Stremio et installez
+le module à jour. Laissez Transmission ouvert. Prévisualisez puis appliquez :
+
+```sh
+NODE=/Applications/Stremio.app/Contents/MacOS/node
+"$NODE" stremio-integration/cli.cjs migrate-folders
+"$NODE" stremio-integration/cli.cjs migrate-folders --apply
+```
+
+La migration ne concerne que les imports identifiés par le journal et le marqueur
+Sème. Elle met le torrent en pause, demande à Transmission de déplacer ses fichiers,
+vérifie les données puis reprend le partage si le torrent était actif. Une pause
+manuelle est conservée. Les autres torrents et les fichiers étrangers sont laissés
+en place. En cas d’erreur, le journal conserve l’opération en cours et le torrent
+reste en pause ; ne renommez pas les dossiers dans Finder pendant la migration.
+Cette commande de migration est réservée à Transmission ; les nouveaux noms sont
+utilisés avec les trois clients.
 
 ## Transfert et limites
 

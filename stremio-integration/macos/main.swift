@@ -188,7 +188,7 @@ final class IntegrationWindow: NSWindowController {
         catch { show("Could not encode settings.", error: true); return }
         busy = true; buttons.forEach { $0.isEnabled = false }; client.isEnabled = false
         [address, username, password].forEach { $0.isEnabled = false }
-        show(command == "status" ? "Checking integration…" : "Working…")
+        show(command == "status" ? "Checking integration…" : command == "install" ? "Checking Stremio and installing integration…" : "Working…")
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process(); let output = Pipe(); let incoming = Pipe()
             process.executableURL = URL(fileURLWithPath: self.node)
@@ -199,7 +199,7 @@ final class IntegrationWindow: NSWindowController {
                 try process.run()
                 incoming.fileHandleForWriting.write(payload); try? incoming.fileHandleForWriting.close()
                 let deadline = DispatchWorkItem { if process.isRunning { process.terminate() } }
-                DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: deadline)
+                DispatchQueue.global().asyncAfter(deadline: .now() + (command == "install" ? 120 : 30), execute: deadline)
                 let data = output.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit(); deadline.cancel()
                 if data.count < 65536, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { response = object }
@@ -215,8 +215,11 @@ final class IntegrationWindow: NSWindowController {
                     self.destination.stringValue = defaults["destinationDir"] as? String ?? self.destination.stringValue
                     self.show("Default folders detected. Choose your torrent client.")
                 } else if let state = response["state"] as? String {
-                    let descriptions = ["installed": "Integration installed.", "restored": "Stremio file restored without the Sème hook. Integration is uninstalled.", "not-installed": "Integration is not installed.", "changed": "Stremio changed since installation. Nothing will be overwritten. Reinstall Stremio or inspect the change before adopting it using the CLI.", "recoverable-hook": "Sème’s exact integration hook is present, but its installation records are missing. Quit Stremio, then use Install integration to recover it while preserving the current server file.", "unknown-hook": "An unrecognized integration hook is present. Restore Stremio before installing."]
+                    let descriptions = ["installed": "Integration installed.", "restored": "Stremio file restored without the Sème hook. Integration is uninstalled.", "not-installed": "Integration is not installed.", "changed": "Stremio changed since installation. Quit Stremio, then use Install integration to verify its official signature, back up the new version and reinstall Sème.", "recoverable-hook": "Sème’s exact integration hook is present, but its installation records are missing. Quit Stremio, then use Install integration to recover it while preserving the current server file.", "unknown-hook": "An unrecognized integration hook is present. Restore Stremio before installing."]
                     var message = descriptions[state] ?? state
+                    if let update = response["verifiedUpdate"] as? [String: Any], let version = update["version"] as? String {
+                        message = "Official Stremio " + version + " verified and backed up. Integration reinstalled."
+                    }
                     if state == "installed" {
                         if command == "install" || response["running"] as? Bool != true {
                             message += " Open Stremio, then use Add to Stremio to register the visible addon."
@@ -285,7 +288,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
-        setup = IntegrationWindow(); setup?.showWindow(nil); NSApp.activate(ignoringOtherApps: true)
+        showSetupWindow()
+    }
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard urls.contains(where: { url in
+            guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return false }
+            return components.scheme == "seme" && components.host == "configure"
+                && components.path.isEmpty && components.query == nil && components.fragment == nil
+                && components.user == nil && components.password == nil && components.port == nil
+        }) else { return }
+        showSetupWindow()
+    }
+    private func showSetupWindow() {
+        // Reuse the controller when a URL arrives before launch completes or
+        // while the app is already open, preserving any unsaved field values.
+        if setup == nil { setup = IntegrationWindow() }
+        setup?.window?.deminiaturize(nil)
+        setup?.showWindow(nil)
+        setup?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }

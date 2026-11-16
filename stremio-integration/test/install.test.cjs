@@ -16,6 +16,8 @@ async function fixture(t, content) {
   const sourceDir = path.join(root, 'source');
   await fs.mkdir(sourceDir);
   await fs.writeFile(path.join(sourceDir, 'index.cjs'), 'global.__semeFixture = true;\n');
+  await fs.mkdir(path.join(sourceDir, 'assets'));
+  await fs.writeFile(path.join(sourceDir, 'assets', 'icon.png'), Buffer.from([137, 80, 78, 71]));
   await fs.mkdir(path.join(sourceDir, 'test'));
   await fs.writeFile(path.join(sourceDir, 'test', 'excluded.cjs'), 'throw new Error("test");');
   const original = content || Buffer.from('#!/usr/bin/env node\r\n// original\nmodule.exports = "Stremio";\n\0\xff', 'latin1');
@@ -39,6 +41,7 @@ test('installation preserves shebang, exact bytes, mode and private backup; repe
   assert.deepEqual(await fs.readFile(path.join(loc.state, manifest.originalHash + '.original')), f.original);
   assert.equal((await fs.stat(path.join(loc.state, manifest.originalHash + '.original'))).mode & 0o777, 0o600);
   await assert.rejects(fs.stat(path.join(loc.module, 'test')));
+  assert.deepEqual(await fs.readFile(path.join(loc.module, 'assets', 'icon.png')), Buffer.from([137, 80, 78, 71]));
   assert.equal((await installer.install(f)).unchanged, true);
   assert.deepEqual(await fs.readFile(f.server), patched);
   assert.equal((await installer.uninstall(f)).state, 'restored');
@@ -54,7 +57,7 @@ test('modified patch cannot be overwritten by uninstall or reinstall', async t =
   const edited = await fs.readFile(f.server);
   assert.equal((await installer.status(f)).state, 'changed');
   await assert.rejects(installer.uninstall(f), /stale backup/);
-  await assert.rejects(installer.install(f), /changed since installation/);
+  await assert.rejects(installer.install(f), /still contains a Sème hook/);
   await assert.rejects(installer.install({ ...f, acceptUpdate: true }), /still contains a Sème hook/);
   assert.deepEqual(await fs.readFile(f.server), edited);
 });
@@ -152,7 +155,7 @@ test('an existing changed manifest cannot be replaced by orphan recovery even wh
   const changed = installer.patch(Buffer.from('// changed upstream body\n'), path.join(loc.module, 'index.cjs'), f.configFile);
   await fs.writeFile(f.server, changed);
   assert.equal((await installer.status(f)).state, 'changed');
-  await assert.rejects(installer.install(f), /changed since installation/);
+  await assert.rejects(installer.install(f), /still contains a Sème hook/);
   await assert.rejects(installer.install({ ...f, acceptUpdate: true }), /still contains a Sème hook/);
   assert.deepEqual(await fs.readFile(path.join(loc.state, 'manifest.json')), manifest);
   assert.deepEqual(await fs.readFile(f.server), changed);
@@ -204,7 +207,7 @@ test('known upstream update needs explicit adoption and restores the new upstrea
   await installer.install(f);
   const update = Buffer.from('// new upstream version\nconsole.log("updated");\n');
   await fs.writeFile(f.server, update);
-  await assert.rejects(installer.install(f), /changed since installation/);
+  await assert.rejects(installer.install(f), /official Contents|requires macOS/);
   await assert.rejects(installer.uninstall(f), /stale backup/);
   await installer.install({ ...f, acceptUpdate: true });
   await installer.uninstall(f);
@@ -295,4 +298,91 @@ test('client test warns that a separate incomplete directory is unsupported', as
     assert.match(JSON.parse(result.output).error, /separate incomplete folder/);
     assert.ok(!result.output.includes('secret-no-stdout'));
   } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+async function updateFixture(t) {
+  const f = await fixture(t);
+  const server = path.join(f.root, 'Stremio.app', 'Contents', 'MacOS', 'server.js');
+  await fs.mkdir(path.dirname(server), { recursive: true });
+  await fs.rename(f.server, server); f.server = server;
+  await installer.install(f);
+  const update = Buffer.from('// official updated upstream\nconsole.log("5.1.0");\n');
+  await fs.writeFile(f.server, update);
+  const loc = installer.locations(f.server, f.configFile);
+  await fs.mkdir(path.dirname(f.configFile), { recursive: true });
+  await fs.writeFile(f.configFile, 'preserve config exactly\n');
+  await fs.writeFile(path.join(path.dirname(f.configFile), 'torrent-state.json'), 'preserve torrents\n');
+  return { ...f, update, loc };
+}
+
+async function privateSnapshot(f) {
+  const result = {};
+  async function visit(directory) {
+    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) await visit(file);
+      else result[path.relative(f.root, file)] = (await fs.readFile(file)).toString('base64');
+    }
+  }
+  await visit(f.root); return result;
+}
+
+test('ordinary install adopts a verified official update, retains old backup and uninstalls to the new pristine bytes', async t => {
+  const f = await updateFixture(t);
+  let calls = 0;
+  const verifiedUpdate = { version: '5.1.0', teamIdentifier: 'BH62GT22G7', bundleIdentifier: 'com.westbridge.stremio5-mac' };
+  const result = await installer.install({ ...f, verifyVendor: async (server, expectedHash) => {
+    calls++; assert.equal(server, f.server); assert.equal(expectedHash, installer.hash(f.update));
+    assert.deepEqual(await fs.readFile(f.server), f.update); return verifiedUpdate;
+  } });
+  assert.equal(calls, 1); assert.equal(result.state, 'installed'); assert.deepEqual(result.verifiedUpdate, verifiedUpdate);
+  const manifest = JSON.parse(await fs.readFile(path.join(f.loc.state, 'manifest.json')));
+  assert.equal(manifest.originalHash, installer.hash(f.update)); assert.deepEqual(manifest.verifiedUpdate, verifiedUpdate);
+  assert.deepEqual(await fs.readFile(path.join(f.loc.state, installer.hash(f.original) + '.original')), f.original);
+  assert.deepEqual(await fs.readFile(path.join(f.loc.state, installer.hash(f.update) + '.original')), f.update);
+  assert.equal(await fs.readFile(f.configFile, 'utf8'), 'preserve config exactly\n');
+  assert.equal(await fs.readFile(path.join(path.dirname(f.configFile), 'torrent-state.json'), 'utf8'), 'preserve torrents\n');
+  await installer.uninstall(f); assert.deepEqual(await fs.readFile(f.server), f.update);
+});
+
+test('signature rejection leaves server, runtime, backups, manifest and config unchanged', async t => {
+  const f = await updateFixture(t), snapshot = await privateSnapshot(f);
+  for (const message of ['invalid signature', 'wrong vendor identity']) {
+    await assert.rejects(installer.install({ ...f, verifyVendor: async () => { throw new Error(message); } }), new RegExp(message));
+    assert.deepEqual(await privateSnapshot(f), snapshot);
+  }
+});
+
+test('changed hooks are rejected before calling the official verifier, including manual adoption', async t => {
+  const f = await updateFixture(t);
+  await fs.writeFile(f.server, installer.patch(f.update, path.join(f.loc.module, 'index.cjs'), f.configFile));
+  let called = false; const verifyVendor = async () => { called = true; throw new Error('must not run'); };
+  for (const acceptUpdate of [false, true]) await assert.rejects(installer.install({ ...f, acceptUpdate, verifyVendor }), /still contains a Sème hook/);
+  assert.equal(called, false);
+});
+
+test('a file changed or Stremio started during signature verification is rejected before installer mutations', async t => {
+  for (const race of ['bytes', 'running', 'process unavailable']) {
+    const f = await updateFixture(t);
+    const manifest = await fs.readFile(path.join(f.loc.state, 'manifest.json'));
+    const runtime = await fs.readFile(path.join(f.loc.module, 'index.cjs'));
+    let verified = false;
+    await assert.rejects(installer.install({ ...f,
+      verifyVendor: async () => {
+        verified = true;
+        if (race === 'bytes') await fs.writeFile(f.server, '// concurrent upstream update\n');
+        return { version: '5.1.0' };
+      },
+      processProbe: async () => { if (verified && race === 'process unavailable') throw new Error('unavailable'); return verified && race === 'running'; }
+    }), /changed during installation|Quit Stremio|Cannot check Stremio processes/);
+    assert.deepEqual(await fs.readFile(path.join(f.loc.state, 'manifest.json')), manifest);
+    assert.deepEqual(await fs.readFile(path.join(f.loc.module, 'index.cjs')), runtime);
+    await assert.rejects(fs.stat(path.join(f.loc.state, installer.hash(f.update) + '.original')), { code: 'ENOENT' });
+  }
+});
+
+test('a running Stremio prevents official signature verification', async t => {
+  const f = await updateFixture(t); let called = false;
+  await assert.rejects(installer.install({ ...f, processProbe: async () => true, verifyVendor: async () => { called = true; } }), /Quit Stremio/);
+  assert.equal(called, false);
 });

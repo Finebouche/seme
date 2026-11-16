@@ -10,6 +10,7 @@ function argumentsFor(args) {
     if (args[i] === '--server' && args[i + 1]) result.server = path.resolve(args[++i]);
     else if (args[i] === '--config' && args[i + 1]) result.configFile = path.resolve(args[++i]);
     else if (args[i] === '--accept-update') result.acceptUpdate = true;
+    else if (args[i] === '--apply' && result.command === 'migrate-folders') result.apply = true;
     else throw new Error('Unknown option. Credentials must be provided through JSON on stdin, never command arguments.');
   }
   return result;
@@ -47,6 +48,20 @@ async function main() {
     }
     case 'install': return installer.install(options);
     case 'uninstall': return installer.uninstall(options);
+    case 'migrate-folders': {
+      if (options.apply) {
+        const state = await installer.status(options);
+        if (state.running !== false) throw new Error('Quit Stremio completely before migrating folders.');
+        if (state.state !== 'installed' || !fs.existsSync(path.join(state.module, 'lib', 'naming.cjs'))) {
+          throw new Error('Install the updated Sème integration before migrating folders.');
+        }
+      }
+      const result = await require('./lib/migrate.cjs').migrate(await config.loadConfig(options.configFile), {
+        apply: !!options.apply, stateDir: path.join(path.dirname(options.configFile), 'state'),
+      });
+      if (result.busy || result.errors.length) process.exitCode = 1;
+      return result;
+    }
     case 'configure': {
       await config.saveConfig(await stdinJSON(true), options.configFile);
       return { ok: true, message: 'Configuration saved.', configFile: options.configFile };
@@ -67,7 +82,7 @@ async function main() {
       }
       return { ok: true, message: 'Torrent client connection succeeded.' };
     }
-    default: throw new Error('Commands: status, preview, install, uninstall, configure, validate, test-client.');
+    default: throw new Error('Commands: status, preview, install, uninstall, configure, validate, test-client, migrate-folders [--apply].');
   }
 }
 main().then(result => process.stdout.write(JSON.stringify(result) + '\n')).catch(error => {

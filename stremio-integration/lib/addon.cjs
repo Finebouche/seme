@@ -9,8 +9,9 @@ const { configPath, defaultConfig, loadConfig, saveConfig } = require('./config.
 
 const DEFAULT_PORT = 17881;
 const MANIFEST_ID = 'org.finebouche.seme';
-const VERSION = '0.4.1';
+const VERSION = '0.4.3';
 const MAX_BODY = 32768;
+const logo = fs.readFileSync(path.join(__dirname, '..', 'assets', 'icon.png'));
 const manifest = {
   id: MANIFEST_ID, version: VERSION, name: 'Sème',
   description: 'Intégration locale : conserve les vidéos du cache Stremio dans votre client torrent. Désinstaller cet addon retire seulement sa fiche ; utilisez Sème Setup pour retirer l’intégration.',
@@ -82,33 +83,45 @@ function readBody(request) {
   });
 }
 
+function launcherPage(nonce) {
+  return `<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Ouvrir Sème Setup</title><style>
+  body{font:16px/1.6 system-ui,sans-serif;color:#243b30;background:#f4f1e9;padding:40px 20px}main{max-width:520px;margin:auto}a{color:#345e3a}.open{display:inline-block;padding:12px 20px;background:#345e3a;color:white;border-radius:10px;text-decoration:none}small{display:block;margin-top:24px}
+  </style></head><body><main><h1>Configuration de Sème</h1><p>Les réglages s’ouvrent dans Sème Setup. Si votre navigateur le demande, autorisez l’ouverture de l’application.</p><p><a class="open" href="seme://configure">Ouvrir Sème Setup</a></p><p>Si rien ne se passe, ouvrez une fois la nouvelle application Sème Setup depuis le Finder pour l’enregistrer auprès de macOS, puis réessayez.</p><small><a href="/configure?web=1">Utiliser la configuration web</a> · Vous pouvez fermer cette page après l’ouverture de l’application.</small></main><script nonce="${nonce}">window.location.href = 'seme://configure';</script></body></html>`;
+}
+
 function start(options = {}) {
   const file = options.configFile || configPath();
   const token = crypto.randomBytes(32).toString('hex');
   let origin, stopping;
   const server = http.createServer((request, response) => {
-    function send(status, body, type = 'text/plain; charset=utf-8', cors = false) {
+    function send(status, body, type = 'text/plain; charset=utf-8', cors = false, scriptNonce = '') {
       response.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin',
-        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" + (scriptNonce ? `; script-src 'nonce-${scriptNonce}'` : ''),
         'X-Frame-Options': 'DENY', ...(cors ? { 'Access-Control-Allow-Origin': '*' } : {}) });
       response.end(body);
     }
     async function route() {
       if (request.headers.host !== origin.slice(7)) return send(403, 'Accès local refusé.');
       const pathname = request.url.split('?')[0];
-      const publicRoute = pathname === '/manifest.json' || /^\/meta\/other\/seme(?::|%3[aA])[^/]*\.json$/.test(pathname);
+      const publicRoute = pathname === '/manifest.json' || pathname === '/icon.png' || /^\/meta\/other\/seme(?::|%3[aA])[^/]*\.json$/.test(pathname);
       if (request.method === 'OPTIONS' && publicRoute) {
         response.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, OPTIONS',
           ...(request.headers['access-control-request-private-network'] === 'true' ? { 'Access-Control-Allow-Private-Network': 'true' } : {}),
           'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
         return response.end();
       }
-      if (request.method === 'GET' && pathname === '/manifest.json') return send(200, JSON.stringify(manifest), 'application/json; charset=utf-8', true);
+      if (request.method === 'GET' && pathname === '/manifest.json') return send(200, JSON.stringify({ ...manifest, logo: `${origin}/icon.png` }), 'application/json; charset=utf-8', true);
+      if (request.method === 'GET' && pathname === '/icon.png') return send(200, logo, 'image/png', true);
       if (request.method === 'GET' && /^\/meta\/other\/seme(?::|%3[aA])[^/]*\.json$/.test(pathname)) return send(200, '{"meta":null}', 'application/json; charset=utf-8', true);
       if (pathname !== '/configure' && pathname !== '/configure/') return send(404, 'Introuvable.');
       if (request.headers.origin && request.headers.origin !== origin) return send(403, 'Origine refusée.');
       if (request.method === 'GET') {
-        let config, notice = request.url === '/configure?saved=1' ? 'Réglages enregistrés. Ils seront utilisés à la prochaine analyse.' : '';
+        const query = new URL(request.url, origin).searchParams;
+        if (query.get('web') !== '1') {
+          const nonce = crypto.randomBytes(24).toString('base64');
+          return send(200, launcherPage(nonce), 'text/html; charset=utf-8', false, nonce);
+        }
+        let config, notice = query.get('saved') === '1' ? 'Réglages enregistrés. Ils seront utilisés à la prochaine analyse.' : '';
         try { config = await loadConfig(file); }
         catch (error) { config = defaultConfig(); notice = error.code === 'ENOENT' ? 'Enregistrez vos réglages pour commencer.' : 'Configuration illisible. Vérifiez-la dans Sème Setup.'; }
         return send(200, page(config, token, await statusText(file), notice), 'text/html; charset=utf-8');
@@ -130,7 +143,7 @@ function start(options = {}) {
       try { await saveConfig(next, file); }
       catch { return send(400, 'Réglages invalides ou enregistrement impossible. Vérifiez les dossiers, le client et son adresse locale dans Sème Setup.'); }
       // Redirect avoids resubmitting credentials when the user refreshes.
-      response.writeHead(303, { Location: '/configure?saved=1', 'Cache-Control': 'no-store', 'Referrer-Policy': 'same-origin' }); response.end();
+      response.writeHead(303, { Location: '/configure?web=1&saved=1', 'Cache-Control': 'no-store', 'Referrer-Policy': 'same-origin' }); response.end();
     }
     route().catch(error => send(error && error.status === 413 ? 413 : 400, error && error.status === 413 ? 'Formulaire trop volumineux.' : 'Requête impossible. Ouvrez Sème Setup.'));
   });

@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const run = promisify(execFile);
+const { verifyOfficialUpdate } = require('./vendor.cjs');
 const BEGIN = '// BEGIN SEME STREMIO INTEGRATION v1';
 const END = '// END SEME STREMIO INTEGRATION v1';
 const MARKER = Buffer.from('SEME STREMIO INTEGRATION');
@@ -120,7 +121,7 @@ async function copyModule(source, destination) {
         if (entry.isSymbolicLink()) throw new Error('Runtime source cannot contain symbolic links.');
         const src = path.join(from, entry.name), dst = path.join(to, entry.name);
         if (entry.isDirectory()) { await fsp.mkdir(dst, { mode: 0o700 }); await copy(src, dst); }
-        else if (entry.isFile() && /\.(cjs|json|md)$/.test(entry.name)) { await fsp.copyFile(src, dst); await fsp.chmod(dst, 0o600); }
+        else if (entry.isFile() && /\.(cjs|json|md|png)$/.test(entry.name)) { await fsp.copyFile(src, dst); await fsp.chmod(dst, 0o600); }
       }
     }
     await copy(source, stage);
@@ -139,11 +140,26 @@ async function install(options) {
   if (before.running === null) throw new Error('Cannot check Stremio processes. Run setup outside this restricted environment after quitting Stremio.');
   if (before.running) throw new Error('Quit Stremio completely before installing.');
   if (before.state === 'unknown-hook') throw new Error('An unrecognized Sème hook is present. Restore Stremio before installing.');
-  if (before.state === 'changed' && !options.acceptUpdate) throw new Error('Stremio server.js changed since installation. No files changed. Inspect it, then use --accept-update only for a known clean upstream update.');
   const loc = locations(options.server, options.configFile);
   const current = await fsp.readFile(loc.server);
   if (hash(current) !== before.currentHash) throw new Error('Stremio changed during installation. No patch applied.');
   if (before.state === 'changed' && current.includes(MARKER)) throw new Error('Changed file still contains a Sème hook; refusing to adopt it.');
+  let verifiedUpdate;
+  if (before.state === 'changed' && !options.acceptUpdate) {
+    verifiedUpdate = await (options.verifyVendor || verifyOfficialUpdate)(loc.server, before.currentHash);
+  }
+  async function recheck() {
+    await regular(loc.server);
+    if (hash(await fsp.readFile(loc.server)) !== before.currentHash) throw new Error('Stremio changed during installation. No patch applied.');
+    let running;
+    try { running = await (options.processProbe || activeServer)(loc.server); }
+    catch (_) { throw new Error('Cannot check Stremio processes. No patch applied.'); }
+    if (running) throw new Error('Quit Stremio completely before installing.');
+    // The process probe itself may take time; inspect the bytes once more.
+    await regular(loc.server);
+    if (hash(await fsp.readFile(loc.server)) !== before.currentHash) throw new Error('Stremio changed during installation. No patch applied.');
+  }
+  await recheck();
   const recovering = before.state === 'recoverable-hook';
   const original = recovering ? reconstructUnhooked(current, path.join(loc.module, 'index.cjs'), options.configFile) : current;
   if (recovering && !original) throw new Error('Stremio changed during recovery. No patch applied.');
@@ -167,16 +183,16 @@ async function install(options) {
   const originalHash = hash(original), backup = path.join(loc.state, originalHash + '.original');
   if (!recovering) await saveVerified(backup, original);
   const manifest = { version: 1, server: loc.server, originalHash, patchedHash: hash(patched), mode: before.mode, installedAt: new Date().toISOString() };
+  if (verifiedUpdate) manifest.verifiedUpdate = verifiedUpdate;
   if (recovering) {
     manifest.originalSource = 'reconstructed-unhooked';
     manifest.recovery = recovery;
   }
   // Verify immediately before replacement; all writes remain on the same filesystem.
-  if (hash(await fsp.readFile(loc.server)) !== before.currentHash) throw new Error('Stremio changed during installation. No patch applied.');
-  await regular(loc.server);
+  await recheck();
   await atomicWrite(path.join(loc.state, 'manifest.json'), Buffer.from(JSON.stringify(manifest, null, 2) + '\n'), 0o600);
   if (!recovering) await atomicWrite(loc.server, patched, before.mode);
-  return { ...(await status(options)), unchanged: false, ...(recovering ? { recovered: true } : {}) };
+  return { ...(await status(options)), unchanged: false, ...(recovering ? { recovered: true } : {}), ...(verifiedUpdate ? { verifiedUpdate } : {}) };
 }
 async function uninstall(options) {
   const before = await status(options);

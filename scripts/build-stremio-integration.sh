@@ -23,6 +23,7 @@ cp stremio-integration/macos/Info.plist "$STAGE/Contents/Info.plist"
 cp LICENSE "$STAGE/Contents/Resources/LICENSE"
 cp stremio-integration/*.cjs "$STAGE/Contents/Resources/stremio-integration/"
 ditto stremio-integration/lib "$STAGE/Contents/Resources/stremio-integration/lib"
+ditto stremio-integration/assets "$STAGE/Contents/Resources/stremio-integration/assets"
 cp stremio-integration/package.json "$STAGE/Contents/Resources/stremio-integration/"
 cp docs/stremio-integration.md "$STAGE/Contents/Resources/Integration Guide.md"
 cat > "$STAGE/Contents/Resources/ORIGIN.txt" <<'EOF'
@@ -30,7 +31,7 @@ Sème — https://github.com/Finebouche/seme
 Fork of Seedstrem — https://github.com/kipsilabs/seedstrem
 Original copyright and MIT license: see LICENSE.
 Direct cache integration inspired by stremio-seed; independently implemented.
-Version 0.4.1. Stremio and the torrent clients are separate software.
+Version 0.4.3. Stremio and the torrent clients are separate software.
 EOF
 for size in 16 32 128 256 512; do
   sips -z "$size" "$size" assets/icon-512.png --out "$WORK/Seme.iconset/icon_${size}x${size}.png" >/dev/null

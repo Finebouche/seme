@@ -8,6 +8,7 @@ const { setTimeout: delay } = require('timers/promises');
 const { configPath, loadConfig, validateConfig, atomicJSON, atomicFile, privateDirectory, overlaps } = require('./config.cjs');
 const cache = require('./cache.cjs');
 const { createClient } = require('./clients.cjs');
+const { chooseDestination, destinationName, isDestinationPath, isDestinationName } = require('./naming.cjs');
 const HASH = /^[0-9a-f]{40}$/;
 const NOFOLLOW = fs.constants.O_NOFOLLOW || 0;
 
@@ -93,6 +94,8 @@ async function assertOwned(client, job) {
 
 async function assertSnapshotOwner(job) {
   if (!/^[a-f0-9]{32}$/.test(job.ownerToken || '')) fail('INVALID_STATE');
+  const stat = await fsp.lstat(job.savePath);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) fail('UNSAFE_DESTINATION');
   const marker = await readJSON(path.join(job.savePath, `.seme-owner-${job.ownerToken}.json`));
   if (marker.hash !== job.hash || marker.token !== job.ownerToken) fail('OWNERSHIP_CHANGED');
 }
@@ -163,12 +166,65 @@ async function mergeSnapshot(job, storageInfo) {
 }
 
 function checkJob(job, config) {
-  if (!job || !HASH.test(job.hash) || job.version !== 1 || !samePath(job.savePath, path.join(config.destinationDir, job.hash))) fail('INVALID_STATE');
+  if (!job || !HASH.test(job.hash) || job.version !== 1 || !isDestinationPath(config.destinationDir, job.savePath)) fail('INVALID_STATE');
+  if (job.destinationName !== undefined && !isDestinationName(job.destinationName)) fail('INVALID_STATE');
+  if (job.destinationReserved !== undefined && typeof job.destinationReserved !== 'boolean') fail('INVALID_STATE');
   if (!Array.isArray(job.selected) || !Array.isArray(job.files) || typeof job.added !== 'boolean') fail('INVALID_STATE');
   if (job.pending) {
     const staging = path.join(config.destinationDir, '.seme-staging');
     if (!samePath(path.dirname(path.dirname(job.pending.stagePath)), staging) || path.basename(job.pending.stagePath) !== job.hash) fail('INVALID_STATE');
     if (!Array.isArray(job.pending.files) || !Array.isArray(job.pending.selected)) fail('INVALID_STATE');
+  }
+}
+
+async function moveSnapshot(job, config, persist) {
+  // mkdir reserves a new name without rename's ability to replace an existing
+  // empty directory. A simultaneous import must choose its next hash suffix.
+  for (;;) {
+    let exists = true;
+    try { await fsp.lstat(job.savePath); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; exists = false; }
+    if (exists) {
+      try { await assertSnapshotOwner(job); }
+      catch (error) {
+        if (!job.destinationName || job.destinationReserved) throw error;
+        if (!['ENOENT', 'ELOOP', 'INVALID_STATE', 'OWNERSHIP_CHANGED', 'UNSAFE_DESTINATION'].includes(error.code)) throw error;
+        job.savePath = await chooseDestination(config.destinationDir, job.destinationName, job.hash);
+        await persist(job);
+        continue;
+      }
+      break;
+    }
+    if (job.destinationReserved) fail('OWNERSHIP_CHANGED');
+    const stageStat = await fsp.lstat(job.pending.stagePath);
+    if (!stageStat.isDirectory() || stageStat.isSymbolicLink()) fail('UNSAFE_STAGING_FILE');
+    try { await fsp.mkdir(job.savePath, { mode: 0o700 }); }
+    catch (error) { if (error.code === 'EEXIST') continue; throw error; }
+    await atomicJSON(path.join(job.savePath, `.seme-owner-${job.ownerToken}.json`), { hash: job.hash, token: job.ownerToken });
+    break;
+  }
+  const rootStat = await fsp.lstat(job.savePath);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail('UNSAFE_DESTINATION');
+  await assertSnapshotOwner(job);
+  if (!job.destinationReserved) {
+    job.destinationReserved = true;
+    await persist(job);
+  }
+  let entries;
+  try { entries = await fsp.readdir(job.pending.stagePath); }
+  catch (error) {
+    // Older journals moved the entire snapshot in one rename.
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  const stageStat = await fsp.lstat(job.pending.stagePath);
+  if (!stageStat.isDirectory() || stageStat.isSymbolicLink()) fail('UNSAFE_STAGING_FILE');
+  for (const entry of entries) {
+    if (entry === `.seme-owner-${job.ownerToken}.json`) continue;
+    const target = path.join(job.savePath, entry);
+    try { await fsp.lstat(target); fail('DESTINATION_EXISTS'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    await fsp.rename(path.join(job.pending.stagePath, entry), target);
   }
 }
 
@@ -203,7 +259,7 @@ async function scan(config, options = {}) {
         const job = await readJSON(path.join(journalDir, file));
         checkJob(job, config);
         jobs.set(job.hash, job);
-        if (job.phase !== 'ready') byHash.set(job.hash, byHash.get(job.hash) || null);
+        if (job.phase !== 'ready' || job.relocation) byHash.set(job.hash, byHash.get(job.hash) || null);
       } catch (error) {
         byHash.delete(file.slice(0, -5));
         report.errors.push({ hash: file.slice(0, -5), code: 'INVALID_STATE' });
@@ -213,6 +269,7 @@ async function scan(config, options = {}) {
       if (!HASH.test(hash)) continue;
       try {
         let job = jobs.get(hash);
+        if (job && job.relocation) fail('MIGRATION_REQUIRED');
         if (job && job.phase === 'setup-failed') fail('ADDED_SETUP_FAILED');
         if (job && !job.added && job.phase === 'adding') fail('AMBIGUOUS_ADD');
         if (job && job.phase === 'ready' && candidate && candidate.selected.every(index => job.selected.includes(index))) continue;
@@ -240,7 +297,11 @@ async function scan(config, options = {}) {
             await fsp.rm(stageParent, { recursive: true, force: true });
             throw error;
           }
-          job = job || { version: 1, hash, savePath: path.join(config.destinationDir, hash), selected: [], files: exported.files, added: false, ownerToken: crypto.randomBytes(16).toString('hex') };
+          if (!job) {
+            const name = destinationName(candidate.name, { singleFile: candidate.multiFile === false });
+            job = { version: 1, hash, savePath: await chooseDestination(config.destinationDir, name, hash), destinationName: name,
+              selected: [], files: exported.files, added: false, ownerToken: crypto.randomBytes(16).toString('hex') };
+          }
           job.pending = { stagePath: exported.savePath, files: exported.files, selected, shouldResume: !job.added || !live.paused };
           job.phase = 'prepared';
           // Metainfo is kept outside the download tree, and never logged.
@@ -252,22 +313,13 @@ async function scan(config, options = {}) {
         if (!job.added) {
           if (job.phase === 'adding') fail('AMBIGUOUS_ADD');
           if (job.phase === 'prepared') {
-            // Record intent before the atomic move. Its random ownership marker
+            // Record intent before reserving and moving. Its ownership marker
             // distinguishes our moved snapshot from any preexisting directory.
-            try { await fsp.lstat(job.savePath); fail('DESTINATION_EXISTS'); }
-            catch (error) { if (error.code !== 'ENOENT') throw error; }
             job.phase = 'moving';
             await persist(job);
           }
           if (job.phase === 'moving') {
-            let exists = true;
-            try { await fsp.lstat(job.savePath); }
-            catch (error) { if (error.code !== 'ENOENT') throw error; exists = false; }
-            if (exists) await assertSnapshotOwner(job);
-            else {
-              await fsp.rename(job.pending.stagePath, job.savePath);
-              await assertSnapshotOwner(job);
-            }
+            await moveSnapshot(job, config, persist);
           }
           job.phase = 'adding';
           await persist(job);

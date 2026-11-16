@@ -380,4 +380,4 @@ async function exportCandidate(candidate, destinationRoot, options = {}) {
   }
 }
 
-module.exports = { discover, exportCandidate };
+module.exports = { discover, exportCandidate, decodeTorrent };
