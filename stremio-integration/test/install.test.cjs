@@ -59,6 +59,146 @@ test('modified patch cannot be overwritten by uninstall or reinstall', async t =
   assert.deepEqual(await fs.readFile(f.server), edited);
 });
 
+test('orphaned exact hook recovery retains server bytes and config, snapshots the patch, and restores reconstructed bytes', async t => {
+  const f = await fixture(t);
+  const loc = installer.locations(f.server, f.configFile);
+  const patched = installer.patch(f.original, path.join(loc.module, 'index.cjs'), f.configFile);
+  await fs.writeFile(f.server, patched);
+  await fs.mkdir(path.dirname(f.configFile), { recursive: true });
+  const config = Buffer.from('{ "password": "keep exact config bytes" }\n');
+  await fs.writeFile(f.configFile, config, { mode: 0o600 });
+  const before = await fs.stat(f.server);
+  assert.equal((await installer.status(f)).state, 'recoverable-hook');
+  const result = await installer.install(f);
+  assert.equal(result.state, 'installed');
+  assert.equal(result.recovered, true);
+  assert.deepEqual(await fs.readFile(f.server), patched);
+  assert.equal((await fs.stat(f.server)).ino, before.ino);
+  assert.equal((await fs.stat(f.server)).mtimeMs, before.mtimeMs);
+  assert.deepEqual(await fs.readFile(f.configFile), config);
+  assert.equal((await fs.stat(f.configFile)).mode & 0o777, 0o600);
+  assert.equal(await fs.readFile(path.join(loc.module, 'index.cjs'), 'utf8'), 'global.__semeFixture = true;\n');
+  const manifest = JSON.parse(await fs.readFile(path.join(loc.state, 'manifest.json')));
+  assert.equal(manifest.originalSource, 'reconstructed-unhooked');
+  assert.equal(manifest.recovery.method, 'removed-exact-current-hook');
+  assert.equal(manifest.recovery.verifiedVendorOriginal, false);
+  assert.equal(manifest.recovery.snapshotHash, installer.hash(patched));
+  assert.deepEqual(await fs.readFile(path.join(loc.state, manifest.recovery.snapshot)), patched);
+  assert.equal((await fs.stat(path.join(loc.state, manifest.recovery.snapshot))).mode & 0o777, 0o600);
+  assert.deepEqual(await fs.readFile(path.join(loc.state, manifest.originalHash + '.original')), f.original);
+  assert.equal((await installer.install(f)).unchanged, true);
+  assert.equal((await installer.uninstall(f)).state, 'restored');
+  assert.deepEqual(await fs.readFile(f.server), f.original);
+});
+
+test('recovery recognizes canonical placement with or without shebang and preserves arbitrary body bytes', async t => {
+  for (const original of [Buffer.from('// upstream\n\0\xff', 'latin1'), Buffer.from('#!/usr/bin/env node\n// upstream\n'), Buffer.from('#!/usr/bin/env node\r\n// upstream\r\n')]) {
+    const f = await fixture(t, original);
+    const loc = installer.locations(f.server, f.configFile);
+    const patched = installer.patch(original, path.join(loc.module, 'index.cjs'), f.configFile);
+    await fs.writeFile(f.server, patched);
+    assert.equal((await installer.status(f)).state, 'recoverable-hook');
+    await installer.install(f);
+    await installer.uninstall(f);
+    assert.deepEqual(await fs.readFile(f.server), original);
+  }
+});
+
+test('orphan recovery rejects altered code, paths, markers, duplicate hooks and displaced hooks', async t => {
+  const f = await fixture(t);
+  const loc = installer.locations(f.server, f.configFile);
+  const hook = installer.patch(Buffer.alloc(0), path.join(loc.module, 'index.cjs'), f.configFile);
+  const body = Buffer.from('// upstream body\n');
+  const variants = [
+    Buffer.concat([Buffer.from(hook.toString().replace('try {', 'try  {')), body]),
+    installer.patch(body, path.join(loc.module, 'elsewhere.cjs'), f.configFile),
+    installer.patch(body, path.join(loc.module, 'index.cjs'), f.configFile + '.other'),
+    Buffer.concat([Buffer.from(hook.toString().replace(installer.END, installer.END + ' altered')), body]),
+    Buffer.concat([Buffer.from(hook.toString().replace('v1', 'v2')), body]),
+    Buffer.concat([hook, hook, body]),
+    Buffer.concat([body, hook]),
+    Buffer.concat([hook, Buffer.from('#!/usr/bin/env node\n'), body]),
+    Buffer.concat([hook, body, Buffer.from('// BEGIN SEME STREMIO INTEGRATION v2\n')]),
+    Buffer.from(installer.END + '\n')
+  ];
+  for (const bytes of variants) {
+    await fs.writeFile(f.server, bytes);
+    assert.equal((await installer.status(f)).state, 'unknown-hook');
+    await assert.rejects(installer.install(f), /unrecognized/);
+    await assert.rejects(installer.install({ ...f, acceptUpdate: true }), /unrecognized/);
+    assert.deepEqual(await fs.readFile(f.server), bytes);
+    await assert.rejects(fs.stat(path.join(loc.state, 'manifest.json')), { code: 'ENOENT' });
+    await assert.rejects(fs.stat(loc.module), { code: 'ENOENT' });
+  }
+});
+
+test('orphan recovery still requires an available process check and a stopped Stremio server', async t => {
+  const f = await fixture(t);
+  const loc = installer.locations(f.server, f.configFile);
+  const patched = installer.patch(f.original, path.join(loc.module, 'index.cjs'), f.configFile);
+  await fs.writeFile(f.server, patched);
+  await assert.rejects(installer.install({ ...f, processProbe: async () => true }), /Quit Stremio/);
+  await assert.rejects(installer.install({ ...f, processProbe: async () => { throw new Error('unavailable'); } }), /Cannot check Stremio processes/);
+  assert.deepEqual(await fs.readFile(f.server), patched);
+  await assert.rejects(fs.stat(loc.module), { code: 'ENOENT' });
+  await assert.rejects(fs.stat(path.join(loc.state, 'manifest.json')), { code: 'ENOENT' });
+});
+
+test('an existing changed manifest cannot be replaced by orphan recovery even when the new hook is exact', async t => {
+  const f = await fixture(t);
+  await installer.install(f);
+  const loc = installer.locations(f.server, f.configFile);
+  const manifest = await fs.readFile(path.join(loc.state, 'manifest.json'));
+  const changed = installer.patch(Buffer.from('// changed upstream body\n'), path.join(loc.module, 'index.cjs'), f.configFile);
+  await fs.writeFile(f.server, changed);
+  assert.equal((await installer.status(f)).state, 'changed');
+  await assert.rejects(installer.install(f), /changed since installation/);
+  await assert.rejects(installer.install({ ...f, acceptUpdate: true }), /still contains a Sème hook/);
+  assert.deepEqual(await fs.readFile(path.join(loc.state, 'manifest.json')), manifest);
+  assert.deepEqual(await fs.readFile(f.server), changed);
+});
+
+test('recovered installs retain strict patched-file and reconstructed-backup checksum checks', async t => {
+  const f = await fixture(t);
+  const loc = installer.locations(f.server, f.configFile);
+  const patched = installer.patch(f.original, path.join(loc.module, 'index.cjs'), f.configFile);
+  await fs.writeFile(f.server, patched);
+  await installer.install(f);
+  await fs.appendFile(f.server, '// unknown edit\n');
+  const changed = await fs.readFile(f.server);
+  await assert.rejects(installer.uninstall(f), /stale backup/);
+  assert.deepEqual(await fs.readFile(f.server), changed);
+  await fs.writeFile(f.server, patched);
+  await fs.writeFile(path.join(loc.state, installer.hash(f.original) + '.original'), 'tampered');
+  await assert.rejects(installer.uninstall(f), /Backup checksum mismatch/);
+  assert.deepEqual(await fs.readFile(f.server), patched);
+});
+
+test('a server changed after inspection is refused before recovery metadata or runtime refresh', async t => {
+  const f = await fixture(t);
+  const loc = installer.locations(f.server, f.configFile);
+  const patched = installer.patch(f.original, path.join(loc.module, 'index.cjs'), f.configFile);
+  await fs.writeFile(f.server, patched);
+  const changed = Buffer.concat([patched, Buffer.from('// concurrent edit\n')]);
+  await assert.rejects(installer.install({ ...f, processProbe: async () => { await fs.writeFile(f.server, changed); return false; } }), /changed during installation/);
+  assert.deepEqual(await fs.readFile(f.server), changed);
+  await assert.rejects(fs.stat(loc.module), { code: 'ENOENT' });
+  await assert.rejects(fs.stat(path.join(loc.state, 'manifest.json')), { code: 'ENOENT' });
+});
+
+test('a corrupt preexisting recovery snapshot prevents runtime restoration and manifest creation', async t => {
+  const f = await fixture(t);
+  const loc = installer.locations(f.server, f.configFile);
+  const patched = installer.patch(f.original, path.join(loc.module, 'index.cjs'), f.configFile);
+  await fs.writeFile(f.server, patched);
+  await fs.mkdir(loc.state, { recursive: true });
+  await fs.writeFile(path.join(loc.state, installer.hash(patched) + '.recovery'), 'corrupt snapshot');
+  await assert.rejects(installer.install(f), /Backup checksum mismatch/);
+  assert.deepEqual(await fs.readFile(f.server), patched);
+  await assert.rejects(fs.stat(loc.module), { code: 'ENOENT' });
+  await assert.rejects(fs.stat(path.join(loc.state, 'manifest.json')), { code: 'ENOENT' });
+});
+
 test('known upstream update needs explicit adoption and restores the new upstream bytes', async t => {
   const f = await fixture(t);
   await installer.install(f);

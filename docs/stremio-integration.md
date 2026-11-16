@@ -1,8 +1,10 @@
 # Intégration directe dans Stremio
 
-Sème est un module CommonJS chargé par `server.js` dans le serveur local Stremio.
-Il ne crée aucun serveur HTTP, processus permanent, tâche macOS ni service de
-lancement à la connexion. Il vit dans le processus Node existant de Stremio.
+Sème 0.4.1 est un module CommonJS chargé par `server.js` dans le serveur local
+Stremio. Il vit dans le processus Node existant de Stremio, sans processus
+permanent supplémentaire, tâche macOS ni service de lancement à la connexion.
+Ce même module expose une extension compagnon et sa page **Configure** sur
+`http://127.0.0.1:17881`. Les anciens composants Go et React restent retirés.
 
 ## Réglages
 
@@ -29,6 +31,32 @@ modifiés. Ils sont relus entre les scans ; une sauvegarde via Sème Setup réac
 les transferts. Changer de client ou de dossier n’adopte ni ne déplace les torrents
 précédemment importés.
 
+## Extension compagnon et configuration
+
+Après avoir quitté Stremio, utilisez **Install integration** dans Sème Setup
+pour installer ou mettre à jour le module chargé par son serveur. Rouvrez ensuite
+Stremio et utilisez **Add to Stremio** dans Sème Setup. Ce bouton vérifie le
+manifeste local, puis ouvre l’écran d’installation des extensions dans Stremio.
+Confirmez l’ajout de **Sème** : son bouton **Configure** ouvre les réglages et
+l’état du module. La page est aussi accessible à
+`http://127.0.0.1:17881/configure` pendant que le serveur Stremio fonctionne.
+
+Le manifeste `http://127.0.0.1:17881/manifest.json` porte l’identifiant
+`org.finebouche.seme`, la version `0.4.1` et l’indication `configurable`. Cette
+extension n’ajoute ni catalogue ni source vidéo : le transfert continue à lire
+directement le cache de Stremio. Le serveur HTTP est limité à l’adresse de boucle
+locale ; il utilise le processus Node déjà ouvert par Stremio. Stremio doit donc
+être ouvert pour ajouter l’extension ou consulter sa configuration.
+
+Les deux installations ont des rôles distincts : **Install integration** modifie
+le serveur, tandis que **Add to Stremio** enregistre son entrée visible dans
+Stremio après redémarrage. Si le manifeste est inaccessible, quittez Stremio,
+mettez le module à jour avec **Install integration**, puis rouvrez Stremio avant
+de réessayer. Désinstaller l’extension dans Stremio retire uniquement son entrée
+visible. Pour retirer le module chargé par le serveur, quittez Stremio et utilisez
+**Uninstall** dans Sème Setup ; retirez aussi l’entrée de ses extensions si elle
+est encore présente.
+
 ## Installation et retour arrière
 
 L’installateur ajoute un bloc `require()` au début du serveur, après son éventuel
@@ -40,6 +68,15 @@ La désinstallation restaure les octets et le mode du fichier original. Elle ne
 supprime pas les données conservées, les réglages ou les torrents. Un fichier
 Stremio modifié après l’installation n’est jamais écrasé par une ancienne copie.
 Quittez Stremio avant toute installation ou désinstallation.
+
+Si les fichiers d’installation ont disparu mais que le bloc Sème correspond
+exactement au bloc généré pour les chemins actuels, **Install integration** peut
+récupérer l’installation. Il conserve une copie complète du serveur actuel,
+reconstitue une sauvegarde en retirant uniquement ce bloc et réinstalle le module
+sans modifier `server.js`. Cette sauvegarde reconstituée ne certifie pas que le
+reste du fichier est identique à une distribution officielle de Stremio. Un bloc
+modifié, dupliqué ou pointant vers d’autres chemins reste refusé. Conservez le
+dossier `Application Support/Seme` tant que l’intégration est installée.
 
 **Modifier Stremio.app invalide sa signature.** Si l’application reste bloquée
 après restauration du fichier, réinstallez une copie officielle de Stremio.
@@ -125,7 +162,9 @@ un arrêt brutal ; ne les effacez pas pendant un transfert.
 Les tests couvrent les caches mono/multifichiers, les frontières de morceaux,
 l’import d’un second épisode, l’isolation, les erreurs et reprises, les trois RPC
 simulés et la restauration de Stremio. Le module et l’installateur sont vérifiés
-avec Node 16.20.2 embarqué.
+avec Node 16.20.2 embarqué. L’ajout de l’extension visible et son bouton
+**Configure** doivent aussi être vérifiés dans l’interface Stremio après
+installation du module et redémarrage du serveur.
 
 Une utilisation réelle avec Transmission a été confirmée par l’utilisateur. Cela
 ne valide pas tous les cas de transfert, ni les clients qBittorrent et Deluge.

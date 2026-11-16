@@ -18,7 +18,7 @@ final class IntegrationWindow: NSWindowController {
 
     init(screenshot: Bool = false) {
         screenshotMode = screenshot
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 740), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 820), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "Sème Setup"
         window.isReleasedWhenClosed = false
         super.init(window: window)
@@ -65,16 +65,18 @@ final class IntegrationWindow: NSWindowController {
         let install = button("Install integration", action: #selector(installIntegration))
         let uninstall = button("Uninstall", action: #selector(uninstallIntegration))
         let refresh = button("Refresh status", action: #selector(refreshStatus))
+        let add = button("Add to Stremio", action: #selector(addToStremio))
+        let addonActions = NSStackView(views: [add, refresh]); addonActions.spacing = 8
         let actions = NSStackView(views: [save, test, install, uninstall])
         actions.spacing = 8
-        let hint = label("Enable your client’s Web UI / RPC access, using local paths. Choose Stremio’s active cache folder and a separate permanent folder accessible to your client. Save settings before installing. Quit Stremio before installing or uninstalling, then reopen it.")
+        let hint = label("Enable your client’s Web UI / RPC access, using local paths. Choose Stremio’s active cache folder and a separate permanent folder accessible to your client. Save settings, quit Stremio, then use Install integration to update its server. Reopen Stremio before Add to Stremio, which registers Sème’s visible addon and Configure button. Removing that addon in Stremio only removes its visible entry; use Uninstall here to remove the server integration.")
         let warning = label(signatureNotice)
         warning.font = .systemFont(ofSize: 11)
         warning.textColor = .secondaryLabelColor
         status.maximumNumberOfLines = 6; status.font = .systemFont(ofSize: 12)
         let stack = NSStackView(views: [brand, heading, intro, clientRow,
             field("Web UI / RPC address", address), field("Username", username), field("Password", password),
-            field("Stremio cache folder", cacheRow), field("Permanent seeding folder", destinationRow), hint, actions, refresh, status, warning])
+            field("Stremio cache folder", cacheRow), field("Permanent seeding folder", destinationRow), hint, actions, addonActions, status, warning])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10
         stack.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -83,7 +85,7 @@ final class IntegrationWindow: NSWindowController {
             stack.topAnchor.constraint(equalTo: root.topAnchor, constant: 26),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -24)
         ])
-        for view in stack.arrangedSubviews where view !== brand && view !== heading && view !== clientRow && view !== actions && view !== refresh {
+        for view in stack.arrangedSubviews where view !== brand && view !== heading && view !== clientRow && view !== actions && view !== addonActions {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
     }
@@ -143,6 +145,37 @@ final class IntegrationWindow: NSWindowController {
     }
     @objc private func uninstallIntegration() { run("uninstall") }
     @objc private func refreshStatus() { run("status") }
+    @objc private func addToStremio() {
+        guard !busy else { return }
+        busy = true; buttons.forEach { $0.isEnabled = false }
+        show("Checking Sème’s local addon…")
+        let manifestAddress = "http://127.0.0.1:17881/manifest.json"
+        var request = URLRequest(url: URL(string: manifestAddress)!)
+        request.timeoutInterval = 5
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            let manifest = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let hints = manifest?["behaviorHints"] as? [String: Any]
+            let reachable = error == nil && (response as? HTTPURLResponse)?.statusCode == 200
+                && manifest?["id"] as? String == "org.finebouche.seme" && hints?["configurable"] as? Bool == true
+            DispatchQueue.main.async {
+                self.busy = false; self.buttons.forEach { $0.isEnabled = true }
+                guard reachable else {
+                    self.show("Sème’s addon is unavailable. Quit Stremio, use Install integration to update it, then reopen Stremio before Add to Stremio.", error: true)
+                    return
+                }
+                var components = URLComponents()
+                components.scheme = "stremio"; components.host = ""; components.path = "/addons"
+                let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+                components.percentEncodedQuery = "addon=" + manifestAddress.addingPercentEncoding(withAllowedCharacters: unreserved)!
+                guard let url = components.url, NSWorkspace.shared.open(url) else {
+                    self.show("Could not open Stremio’s addon installer. Check that Stremio is installed in /Applications.", error: true)
+                    return
+                }
+                self.show("Opened Stremio’s addon installer. Confirm Install there, then use Sème’s Configure button for settings and status.")
+            }
+        }.resume()
+    }
     private func run(_ command: String, input: [String: Any]? = nil, success: (() -> Void)? = nil) {
         guard !busy else { return }
         guard FileManager.default.isExecutableFile(atPath: node),
@@ -182,9 +215,17 @@ final class IntegrationWindow: NSWindowController {
                     self.destination.stringValue = defaults["destinationDir"] as? String ?? self.destination.stringValue
                     self.show("Default folders detected. Choose your torrent client.")
                 } else if let state = response["state"] as? String {
-                    let descriptions = ["installed": "Integration installed. Reopen Stremio to load it.", "restored": "Original Stremio file restored. Integration is uninstalled.", "not-installed": "Integration is not installed.", "changed": "Stremio changed since installation. Nothing will be overwritten. Reinstall Stremio or inspect the change before adopting it using the CLI.", "unknown-hook": "An unrecognized integration hook is present. Restore Stremio before installing."]
+                    let descriptions = ["installed": "Integration installed.", "restored": "Stremio file restored without the Sème hook. Integration is uninstalled.", "not-installed": "Integration is not installed.", "changed": "Stremio changed since installation. Nothing will be overwritten. Reinstall Stremio or inspect the change before adopting it using the CLI.", "recoverable-hook": "Sème’s exact integration hook is present, but its installation records are missing. Quit Stremio, then use Install integration to recover it while preserving the current server file.", "unknown-hook": "An unrecognized integration hook is present. Restore Stremio before installing."]
                     var message = descriptions[state] ?? state
-                    if response["running"] as? Bool == true { message += " Quit Stremio completely before changing the integration." }
+                    if state == "installed" {
+                        if command == "install" || response["running"] as? Bool != true {
+                            message += " Open Stremio, then use Add to Stremio to register the visible addon."
+                        } else {
+                            message += " Stremio is running. Use Add to Stremio to check the local addon and register its visible entry."
+                        }
+                    } else if response["running"] as? Bool == true {
+                        message += " Quit Stremio completely before changing the integration."
+                    }
                     var runtimeError = false
                     if let runtime = response["runtime"] as? [String: Any], let timestamp = runtime["lastScan"] as? String {
                         message += "\nLast scan: " + timestamp + ". Imported: \(runtime["imported"] as? Int ?? 0)."

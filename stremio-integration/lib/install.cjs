@@ -8,6 +8,7 @@ const { promisify } = require('util');
 const run = promisify(execFile);
 const BEGIN = '// BEGIN SEME STREMIO INTEGRATION v1';
 const END = '// END SEME STREMIO INTEGRATION v1';
+const MARKER = Buffer.from('SEME STREMIO INTEGRATION');
 const SIGNATURE_NOTICE = 'Changing server.js invalidates the Stremio app code signature. Sème does not re-sign Stremio. macOS may refuse to launch the modified app; reinstalling Stremio or restoring the exact backup restores its original resources.';
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 function locations(server, configFile) {
@@ -65,7 +66,9 @@ async function status(options) {
     if (currentHash === manifest.patchedHash) state = 'installed';
     else if (currentHash === manifest.originalHash) state = 'restored';
     else state = 'changed';
-  } else if (bytes.includes(Buffer.from(BEGIN))) state = 'unknown-hook';
+  } else if (bytes.includes(MARKER)) {
+    state = reconstructUnhooked(bytes, path.join(loc.module, 'index.cjs'), options.configFile) ? 'recoverable-hook' : 'unknown-hook';
+  }
   let running = null;
   try { running = await (options.processProbe || activeServer)(loc.server); } catch (_) { /* Status remains useful in restricted environments. */ }
   return { state, processCheck: running === null ? 'unavailable' : 'available', server: loc.server, module: loc.module, running, restartRequired: state === 'installed', signatureNotice: SIGNATURE_NOTICE, currentHash, mode: stat.mode & 0o7777 };
@@ -76,6 +79,31 @@ function patch(original, moduleFile, configFile) {
   const newline = original.indexOf(10);
   if (newline < 0) return Buffer.concat([original, Buffer.from('\n' + code)]);
   return Buffer.concat([original.subarray(0, newline + 1), Buffer.from(code), original.subarray(newline + 1)]);
+}
+// Recovery recognizes only our exact current hook at the position patch() uses.
+// It never executes or parses the JavaScript. The remaining bytes are a
+// reconstruction, not evidence of an untouched vendor distribution.
+function reconstructUnhooked(bytes, moduleFile, configFile) {
+  const hook = patch(Buffer.alloc(0), moduleFile, configFile);
+  let offset = 0;
+  if (bytes.subarray(0, 2).toString() === '#!') {
+    const newline = bytes.indexOf(10);
+    if (newline < 0) return null;
+    offset = newline + 1;
+  }
+  if (!bytes.subarray(offset, offset + hook.length).equals(hook)) return null;
+  // Additional or changed markers must not be adopted as part of the body.
+  const firstMarker = bytes.indexOf(MARKER);
+  const secondMarker = bytes.indexOf(MARKER, firstMarker + MARKER.length);
+  if (firstMarker < 0 || secondMarker < 0 || bytes.indexOf(MARKER, secondMarker + MARKER.length) >= 0) return null;
+  const reconstructed = Buffer.concat([bytes.subarray(0, offset), bytes.subarray(offset + hook.length)]);
+  return patch(reconstructed, moduleFile, configFile).equals(bytes) ? reconstructed : null;
+}
+async function saveVerified(file, bytes) {
+  try { await fsp.writeFile(file, bytes, { flag: 'wx', mode: 0o600 }); }
+  catch (error) { if (error.code !== 'EEXIST') throw error; }
+  await regular(file);
+  if (hash(await fsp.readFile(file)) !== hash(bytes)) throw new Error('Backup checksum mismatch.');
 }
 async function copyModule(source, destination) {
   const relative = path.relative(path.resolve(source), path.resolve(destination));
@@ -113,23 +141,42 @@ async function install(options) {
   if (before.state === 'unknown-hook') throw new Error('An unrecognized Sème hook is present. Restore Stremio before installing.');
   if (before.state === 'changed' && !options.acceptUpdate) throw new Error('Stremio server.js changed since installation. No files changed. Inspect it, then use --accept-update only for a known clean upstream update.');
   const loc = locations(options.server, options.configFile);
-  const original = await fsp.readFile(loc.server);
-  if (before.state === 'changed' && (original.includes(Buffer.from(BEGIN)) || original.includes(Buffer.from(END)))) throw new Error('Changed file still contains a Sème hook; refusing to adopt it.');
+  const current = await fsp.readFile(loc.server);
+  if (hash(current) !== before.currentHash) throw new Error('Stremio changed during installation. No patch applied.');
+  if (before.state === 'changed' && current.includes(MARKER)) throw new Error('Changed file still contains a Sème hook; refusing to adopt it.');
+  const recovering = before.state === 'recoverable-hook';
+  const original = recovering ? reconstructUnhooked(current, path.join(loc.module, 'index.cjs'), options.configFile) : current;
+  if (recovering && !original) throw new Error('Stremio changed during recovery. No patch applied.');
+  let recovery;
+  if (recovering) {
+    // Preserve both inputs before restoring the missing runtime. A failed
+    // snapshot must leave the orphan hook unable to start anything new.
+    await fsp.mkdir(loc.state, { recursive: true, mode: 0o700 });
+    await saveVerified(path.join(loc.state, hash(original) + '.original'), original);
+    const snapshot = hash(current) + '.recovery';
+    await saveVerified(path.join(loc.state, snapshot), current);
+    recovery = { method: 'removed-exact-current-hook', snapshot, snapshotHash: hash(current), verifiedVendorOriginal: false };
+  }
   // An already installed exact patch can safely refresh the runtime without touching server.js.
+  await regular(loc.server);
+  if (hash(await fsp.readFile(loc.server)) !== before.currentHash) throw new Error('Stremio changed during installation. No patch applied.');
   await copyModule(options.sourceDir || path.resolve(__dirname, '..'), loc.module);
   if (before.state === 'installed') return { ...before, unchanged: true };
-  const patched = patch(original, path.join(loc.module, 'index.cjs'), options.configFile);
+  const patched = recovering ? current : patch(original, path.join(loc.module, 'index.cjs'), options.configFile);
   await fsp.mkdir(loc.state, { recursive: true, mode: 0o700 });
   const originalHash = hash(original), backup = path.join(loc.state, originalHash + '.original');
-  try { await fsp.writeFile(backup, original, { flag: 'wx', mode: 0o600 }); }
-  catch (error) { if (error.code !== 'EEXIST') throw error; if (hash(await fsp.readFile(backup)) !== originalHash) throw new Error('Backup checksum mismatch.'); }
+  if (!recovering) await saveVerified(backup, original);
   const manifest = { version: 1, server: loc.server, originalHash, patchedHash: hash(patched), mode: before.mode, installedAt: new Date().toISOString() };
+  if (recovering) {
+    manifest.originalSource = 'reconstructed-unhooked';
+    manifest.recovery = recovery;
+  }
   // Verify immediately before replacement; all writes remain on the same filesystem.
   if (hash(await fsp.readFile(loc.server)) !== before.currentHash) throw new Error('Stremio changed during installation. No patch applied.');
   await regular(loc.server);
   await atomicWrite(path.join(loc.state, 'manifest.json'), Buffer.from(JSON.stringify(manifest, null, 2) + '\n'), 0o600);
-  await atomicWrite(loc.server, patched, before.mode);
-  return { ...(await status(options)), unchanged: false };
+  if (!recovering) await atomicWrite(loc.server, patched, before.mode);
+  return { ...(await status(options)), unchanged: false, ...(recovering ? { recovered: true } : {}) };
 }
 async function uninstall(options) {
   const before = await status(options);

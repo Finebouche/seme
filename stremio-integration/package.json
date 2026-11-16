@@ -1,6 +1,6 @@
 {
   "name": "seme-stremio-integration",
-  "version": "0.3.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Preserve Stremio's cached videos in a local torrent client",
   "license": "MIT",

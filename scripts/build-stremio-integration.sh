@@ -30,7 +30,7 @@ Sème — https://github.com/Finebouche/seme
 Fork of Seedstrem — https://github.com/kipsilabs/seedstrem
 Original copyright and MIT license: see LICENSE.
 Direct cache integration inspired by stremio-seed; independently implemented.
-Version 0.3.0. Stremio and the torrent clients are separate software.
+Version 0.4.1. Stremio and the torrent clients are separate software.
 EOF
 for size in 16 32 128 256 512; do
   sips -z "$size" "$size" assets/icon-512.png --out "$WORK/Seme.iconset/icon_${size}x${size}.png" >/dev/null

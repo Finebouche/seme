@@ -43,7 +43,7 @@ async function main() {
     case 'defaults': return { ok: true, defaults: await config.detectedDefaults() };
     case 'preview': {
       const result = await installer.status(options);
-      return { ...result, plannedAction: result.state === 'installed' ? 'Refresh the private integration module; server.js already matches.' : 'Back up server.js exactly, copy the private module, and prepend the Sème hook.', backupDirectory: installer.locations(options.server, options.configFile).state };
+      return { ...result, plannedAction: result.state === 'installed' ? 'Refresh the private integration module; server.js already matches.' : result.state === 'recoverable-hook' ? 'Save the current server and reconstruct its backup by removing only the exact Sème hook; refresh the module without changing server.js.' : 'Back up server.js exactly, copy the private module, and prepend the Sème hook.', backupDirectory: installer.locations(options.server, options.configFile).state };
     }
     case 'install': return installer.install(options);
     case 'uninstall': return installer.uninstall(options);
